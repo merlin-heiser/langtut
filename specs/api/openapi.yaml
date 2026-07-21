@@ -1,0 +1,174 @@
+openapi: 3.1.0
+info:
+  title: Slowakisch AI Tutor API
+  version: 0.1.0
+servers:
+  - url: http://localhost:3210/api/v1
+paths:
+  /status:
+    get:
+      operationId: getStatus
+      responses:
+        '200': { description: Systemstatus }
+  /costs/summary:
+    get:
+      operationId: getApiCostSummary
+      responses:
+        '200':
+          description: Kosten der aktuellen ISO-Woche und Gesamtkosten
+          content:
+            application/json:
+              schema: { $ref: '../schemas/contracts.schema.json#/definitions/ApiCostSummary' }
+  /curriculum:
+    get:
+      operationId: getCurriculum
+      responses:
+        '200':
+          description: Modernisiertes Curriculum
+          content:
+            application/json:
+              schema: { $ref: '../schemas/curriculum.schema.json' }
+  /curriculum/next:
+    get:
+      operationId: getNextModule
+      responses:
+        '200': { description: Nächstes verfügbares Modul }
+  /session-plans:
+    post:
+      operationId: createSessionPlan
+      responses:
+        '201':
+          description: Deterministischer Tagesplan
+          content:
+            application/json:
+              schema: { $ref: '../schemas/planner.schema.json' }
+  /modules/{id}/prepare:
+    post:
+      operationId: prepareModule
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '202':
+          description: Generierungsjob
+          content:
+            application/json:
+              schema: { $ref: '../schemas/jobs.schema.json' }
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Jobstatus
+          content:
+            application/json:
+              schema: { $ref: '../schemas/jobs.schema.json' }
+  /jobs/latest:
+    get:
+      operationId: getLatestJob
+      responses:
+        '200': { description: Zuletzt aktualisierter Job oder null }
+  /placement-sessions:
+    post:
+      operationId: startPlacement
+      responses:
+        '201':
+          description: Placement gestartet
+          content:
+            application/json:
+              schema: { $ref: '../schemas/placement.schema.json' }
+  /placement-sessions/latest:
+    get:
+      operationId: getLatestPlacement
+      responses:
+        '200':
+          description: Zuletzt aktualisiertes Placement oder null
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: '../schemas/placement.schema.json' }
+                  - { type: 'null' }
+  /placement-sessions/{id}/answers:
+    post:
+      operationId: answerPlacement
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Nächste Aufgabe oder Einstufung
+          content:
+            application/json:
+              schema: { $ref: '../schemas/placement.schema.json' }
+  /placement-sessions/{id}/override:
+    post:
+      operationId: overridePlacement
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gewähltes Startmodul }
+  /sessions:
+    post:
+      operationId: startSession
+      responses:
+        '201': { description: Tutor-Session gestartet }
+  /sessions/{id}/turns:
+    post:
+      operationId: createTutorTurn
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Tutorantwort
+          content:
+            application/json:
+              schema: { $ref: '../schemas/session.schema.json' }
+  /sessions/{id}/complete:
+    post:
+      operationId: completeSession
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Strukturierter Sessionreport
+          content:
+            application/json:
+              schema: { $ref: '../schemas/reports.schema.json' }
+  /modules/{id}/milestones/{milestoneId}/attempt:
+    post:
+      operationId: recordMilestoneAttempt
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: milestoneId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Aktualisierter Modulstatus }
+  /quarantine:
+    get:
+      operationId: getQuarantine
+      responses:
+        '200': { description: Ungeklärte Inhalte }
+  /export.jsonl:
+    get:
+      operationId: exportPortableLog
+      responses:
+        '200':
+          description: Portabler JSONL-Snapshot der nachvollziehbaren lokalen Daten
+          content:
+            application/x-ndjson:
+              schema: { type: string }
+  /integrations/anki/status:
+    get:
+      operationId: getAnkiStatus
+      responses:
+        '200': { description: AnkiConnect-Status }
+  /integrations/anki/setup/preview:
+    post:
+      operationId: previewAnkiSetup
+      responses:
+        '200': { description: Geplanter Anki-Setup-Diff }
+  /integrations/anki/setup/apply:
+    post:
+      operationId: applyAnkiSetup
+      responses:
+        '200': { description: Bestätigtes Setup-Ergebnis }

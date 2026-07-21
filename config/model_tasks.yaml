@@ -1,0 +1,54 @@
+version: "1.0"
+tasks:
+  tutor_conversation:
+    provider: openai
+    model: gpt-5.6-terra
+    quality: balanced
+    latency: interactive
+    reasoning_effort: low
+    max_output_tokens: 1200
+    schema: tutor-turn
+  placement_open_response:
+    provider: openai
+    model: gpt-5.6-terra
+    quality: balanced
+    latency: interactive
+    reasoning_effort: low
+    max_output_tokens: 800
+    schema: placement-evaluation
+  vocabulary_generation:
+    provider: gemini
+    model: gemini-3.5-flash
+    quality: balanced
+    latency: batch
+    max_output_tokens: 8000
+    schema: generated-items
+  chunk_generation:
+    provider: gemini
+    model: gemini-3.5-flash
+    quality: balanced
+    latency: batch
+    max_output_tokens: 4000
+    schema: generated-items
+  rule_generation:
+    provider: gemini
+    model: gemini-3.5-flash
+    quality: balanced
+    latency: batch
+    max_output_tokens: 4000
+    schema: generated-items
+  session_report:
+    provider: gemini
+    model: gemini-3.5-flash
+    quality: fast
+    latency: interactive
+    max_output_tokens: 2000
+    schema: tutor-report
+  content_verification:
+    provider: openai
+    model: gpt-5.6-terra
+    quality: high
+    latency: batch
+    reasoning_effort: low
+    max_output_tokens: 2000
+    schema: verification-result

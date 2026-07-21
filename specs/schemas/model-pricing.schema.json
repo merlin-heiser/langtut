@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://langtut.local/schemas/model-pricing.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "currency", "models"],
+  "properties": {
+    "version": { "type": "string" },
+    "currency": { "const": "USD" },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["effective_date", "source", "input_per_million", "cached_input_per_million", "output_per_million"],
+        "properties": {
+          "effective_date": { "type": "string", "format": "date" },
+          "source": { "type": "string", "format": "uri" },
+          "input_per_million": { "type": "number", "minimum": 0 },
+          "cached_input_per_million": { "type": "number", "minimum": 0 },
+          "output_per_million": { "type": "number", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,718 @@
+version: '3.0'
+language: sk
+target_level: B1
+curriculum_type: a0_to_b1
+orthography_policy:
+  canonical_storage:
+    unicode_normalization: NFC
+    require_diacritics_in_storage: true
+  input_matching:
+    accept_without_diacritics_as_near_correct: true
+    near_correct_action:
+      show_correct_form: true
+      allow_full_credit: false
+      tag_error: error_orthography
+    matching_method:
+    - exact_match
+    - casefold_match
+    - strip_diacritics_match
+    strip_diacritics_method: NFD_remove_Mn_then_NFC
+  llm_reporting:
+    orthography_tags_optional: true
+    interface_overrides_allowed: true
+global_targets:
+  estimated_total_vocab_new_items: 2000
+  speaking_goal: Sustain simple conversations; narrate in past/future; give reasons/opinions.
+  writing_goal: Write short connected texts (messages, descriptions, short narratives).
+  vocab_target_semantics: Approximate unique new lexical items introduced per module; cumulative target.
+exercise_type_catalog:
+- pronunciation_drills
+- minimal_pairs
+- dictation_light
+- flashcards_translation
+- gap_fill
+- sentence_building
+- declension_drills
+- conjugation_drills
+- role_play
+- information_gap
+- picture_description
+- story_retell
+- guided_writing
+- free_conversation
+- listening_stub
+modules:
+- id: a0_alphabet_pronunciation
+  cefr: A0
+  title: Alphabet, zvuky, prízvuk
+  vocab_target: 40
+  vocab_domains:
+  - alphabet
+  - classroom
+  - basic_objects
+  functions:
+  - func_greet
+  - func_spell
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: phonology_soft_hard
+    description: Mäkké/tvrdé spoluhlásky, dĺžne, základné páry zvukov.
+  - id: stress_basic
+    description: Prízvuk na prvej slabike; intonácia otázok.
+  - id: pronouns_personal_nom
+    description: Osobné zámená v nominatíve.
+  - id: verb_byt_present
+    description: Byť v prítomnom čase (som/si/je/sme/ste/sú).
+  - id: questions_basic
+    description: Áno/nie otázky + čo/kto/kde.
+  practice_types:
+  - pronunciation_drills
+  - minimal_pairs
+  - dictation_light
+  - role_play
+  prerequisites: []
+  exit_criteria:
+  - Čítaš jednoduché slová a vyslovíš dĺžne.
+  - Vieš sa pozdraviť a predstaviť jednou vetou.
+- id: a0_survival_phrases
+  cefr: A0
+  title: 'Prežitie: pozdravy, zdvorilosť, trieda'
+  vocab_target: 50
+  vocab_domains:
+  - greetings
+  - politeness
+  - classroom
+  - numbers_0_20
+  functions:
+  - func_greet
+  - func_request
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: negation_ne
+    description: Zápor ne- pri slovesách; nie/áno.
+  - id: basic_word_order_svo
+    description: Základný slovosled SVO.
+  - id: copula_basic
+    description: To je..., Toto je..., Ja som...
+  practice_types:
+  - role_play
+  - flashcards_translation
+  - gap_fill
+  - sentence_building
+  prerequisites:
+  - a0_alphabet_pronunciation
+  exit_criteria:
+  - Vieš požiadať o zopakovanie (Ešte raz, prosím).
+  - Vieš povedať čísla 0–20 a jednoduché ceny.
+- id: a1_introductions_identity
+  cefr: A1
+  title: Predstavenie, identita, základné otázky
+  vocab_target: 80
+  vocab_domains:
+  - identity
+  - countries
+  - languages
+  - contact_details
+  functions:
+  - func_introduce
+  - func_ask_info
+  - func_answer_info
+  - func_describe
+  grammar_milestones:
+  - id: nouns_gender
+    description: Rod podstatných mien; základná zhoda prídavných mien.
+  - id: present_regular_verbs
+    description: Prítomný čas pravidelných slovies; základné konjugácie.
+  - id: questions_wh_set
+    description: Kto/čo/kde/odkiaľ/ako/koľko.
+  practice_types:
+  - role_play
+  - question_answer
+  - gap_fill
+  - sentence_building
+  prerequisites:
+  - a0_survival_phrases
+  exit_criteria:
+  - Vieš vyplniť jednoduchý dotazník o sebe.
+  - Vieš krátko hovoriť o pôvode a jazykoch.
+- id: a1_family_people
+  cefr: A1
+  title: Rodina a ľudia
+  vocab_target: 80
+  vocab_domains:
+  - family
+  - people
+  - relationships
+  - photos
+  functions:
+  - func_describe
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: plural_nominative
+    description: Nominatív plurálu; zhoda prídavných mien.
+  - id: accusative_intro
+    description: Akuzatív ako priamy predmet; zámená v akuzatíve.
+  - id: possessives_whose
+    description: Privlastňovacie zámená; čí/čia/čie.
+  practice_types:
+  - picture_description
+  - declension_drills
+  - role_play
+  - flashcards_translation
+  prerequisites:
+  - a1_introductions_identity
+  exit_criteria:
+  - Opíšeš rodinu 5–6 vetami.
+  - Použiješ nomin./akuz. v bežných vetách.
+- id: a1_daily_routine_time
+  cefr: A1
+  title: Denný režim a čas
+  vocab_target: 85
+  vocab_domains:
+  - daily_routine
+  - time
+  - weekdays
+  - months
+  functions:
+  - func_narrate
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: adverbs_frequency
+    description: Príslovky frekvencie.
+  - id: modal_verbs_basic
+    description: Môcť/chcieť/musieť v prítomnom čase.
+  - id: prepositions_time_basic
+    description: O/v/na + časové výrazy.
+  practice_types:
+  - diary_entries
+  - gap_fill
+  - conjugation_drills
+  - role_play
+  prerequisites:
+  - a1_introductions_identity
+  exit_criteria:
+  - Vieš opísať svoj deň v prítomnom čase.
+  - Vieš dohodnúť jednoduché stretnutie.
+- id: a1_home_city_basic_location
+  cefr: A1
+  title: Domov a mesto (kde je čo)
+  vocab_target: 90
+  vocab_domains:
+  - home
+  - furniture
+  - city_places
+  - directions_basic
+  functions:
+  - func_describe
+  - func_ask_info
+  - func_explain
+  - func_request
+  grammar_milestones:
+  - id: locative_intro
+    description: Lokál s v/na/o.
+  - id: motion_vs_location
+    description: do/na + akuz. (pohyb) vs v/na + lokál (miesto).
+  - id: imperatives_intro
+    description: Rozkazovací spôsob.
+  practice_types:
+  - map_directions
+  - picture_description
+  - role_play
+  - sentence_building
+  prerequisites:
+  - a1_daily_routine_time
+  exit_criteria:
+  - Opíšeš byt/izbu a povieš kde bývaš.
+  - Opýtaš sa na cestu a pochopíš jednoduché pokyny.
+- id: a1_food_restaurant
+  cefr: A1
+  title: Jedlo a reštaurácia
+  vocab_target: 100
+  vocab_domains:
+  - food
+  - drinks
+  - restaurant
+  - preferences
+  functions:
+  - func_order
+  - func_request
+  - func_describe
+  grammar_milestones:
+  - id: accusative_objects
+    description: Akuzatív pri objednávaní.
+  - id: instrumental_with
+    description: Inštrumentál pri 's'.
+  - id: polite_requests
+    description: Zdvorilé žiadosti.
+  practice_types:
+  - role_play
+  - menu_selection
+  - gap_fill
+  - declension_drills
+  prerequisites:
+  - a1_home_city_basic_location
+  exit_criteria:
+  - Objednáš jedlo/nápoj a požiadaš o účet.
+  - Povieš preferencie.
+- id: a1_shopping_prices
+  cefr: A1
+  title: Nákupy a ceny
+  vocab_target: 90
+  vocab_domains:
+  - shopping
+  - clothes
+  - colors
+  - money
+  functions:
+  - func_request
+  - func_compare
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: genitive_quantity_intro
+    description: Genitív pri množstve.
+  - id: adjective_comparison_intro
+    description: Základy stupňovania.
+  - id: dative_intro
+    description: Úvod do datívu (recipient, k).
+  practice_types:
+  - price_negotiation
+  - role_play
+  - declension_drills
+  - flashcards_translation
+  prerequisites:
+  - a1_food_restaurant
+  exit_criteria:
+  - Spýtaš sa na cenu/veľkosť/farbu a porovnáš 2 veci.
+  - Vyjadríš množstvo pri nákupe.
+- id: a2_travel_transport
+  cefr: A2
+  title: Cestovanie a doprava
+  vocab_target: 105
+  vocab_domains:
+  - travel
+  - transport
+  - tickets
+  - accommodation
+  functions:
+  - func_request
+  - func_ask_info
+  - func_explain
+  - func_narrate
+  grammar_milestones:
+  - id: past_tense_intro
+    description: 'Minulý čas: byť + l-particíp; zhoda rodu/čísla.'
+  - id: instrumental_transport
+    description: Inštrumentál pre prostriedok.
+  - id: formal_informal_address
+    description: Ty vs vy; zdvorilý register.
+  practice_types:
+  - itinerary_planning
+  - role_play
+  - storytelling
+  - conjugation_drills
+  prerequisites:
+  - a1_shopping_prices
+  exit_criteria:
+  - Kúpiš lístok a opýtaš sa na spoj.
+  - Krátko povieš kam si cestoval.
+- id: a2_genitive_prepositions
+  cefr: A2
+  title: Genitív a predložky (z, do, od, bez)
+  vocab_target: 80
+  vocab_domains:
+  - places
+  - origin
+  - possession
+  - quantities
+  functions:
+  - func_explain
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: genitive_prepositions
+    description: z/do/od/bez + genitív.
+  - id: declension_patterns_intro
+    description: Základné vzory skloňovania (len najfrekventovanejšie).
+  practice_types:
+  - declension_drills
+  - sentence_building
+  - gap_fill
+  - information_gap
+  prerequisites:
+  - a2_travel_transport
+  exit_criteria:
+  - Použiješ z/do/bez v typických vetách.
+  - Skloňuješ vybrané vzorové slová v genitíve.
+- id: a2_health_services
+  cefr: A2
+  title: Zdravie a služby
+  vocab_target: 90
+  vocab_domains:
+  - health
+  - body
+  - pharmacy
+  - services
+  - appointments
+  functions:
+  - func_explain
+  - func_request
+  - func_ask_info
+  grammar_milestones:
+  - id: pain_structures
+    description: Bolí ma…, Je mi… (typické väzby).
+  - id: reflexive_expand
+    description: Rozšírenie reflexívnych slovies.
+  - id: imperatives_polite
+    description: Zdvorilé pokyny.
+  practice_types:
+  - doctor_patient_roleplay
+  - symptom_description
+  - advice_cards
+  - gap_fill
+  prerequisites:
+  - a2_travel_transport
+  exit_criteria:
+  - Opíšeš symptómy a požiadaš o pomoc.
+  - Dohodneš termín.
+- id: a2_future_plans
+  cefr: A2
+  title: Budúcnosť a plány
+  vocab_target: 90
+  vocab_domains:
+  - plans
+  - events
+  - invitations
+  - weather_basic
+  functions:
+  - func_request
+  - func_narrate
+  - func_explain
+  - func_agree_disagree
+  grammar_milestones:
+  - id: future_forms
+    description: Budúci čas (pôjdem… / budem + infinitív).
+  - id: temporal_connectors
+    description: Keď/potom/už/ešte.
+  - id: aspect_intro
+    description: Úvod do aspektu (dokončené vs nedokončené).
+  practice_types:
+  - itinerary_planning
+  - role_play
+  - timeline_narration
+  - gap_fill
+  prerequisites:
+  - a2_travel_transport
+  exit_criteria:
+  - Navrhneš plán a dohodneš sa.
+  - Použiješ 10 aspektových párov.
+- id: a2_motion_verbs_system
+  cefr: A2
+  title: Slovesá pohybu a smer
+  vocab_target: 80
+  vocab_domains:
+  - movement
+  - city
+  - travel
+  - directions
+  functions:
+  - func_explain
+  - func_request
+  - func_ask_info
+  grammar_milestones:
+  - id: motion_pairs
+    description: ísť/chodiť; prísť/prichádzať; odísť/odchádzať.
+  - id: prefixes_motion
+    description: Predpony pri-, od-, do-, vy-, pre- (základ).
+  - id: case_with_motion
+    description: Smer vs miesto (akuz. vs lokál).
+  practice_types:
+  - map_directions
+  - information_gap
+  - sentence_building
+  - conjugation_drills
+  prerequisites:
+  - a2_future_plans
+  exit_criteria:
+  - Opíšeš cestu a použiješ niekoľko predpôn.
+  - Použiješ navigačné frázy.
+- id: a2_work_study
+  cefr: A2
+  title: Práca a štúdium
+  vocab_target: 90
+  vocab_domains:
+  - work
+  - education
+  - tasks
+  - schedules
+  functions:
+  - func_explain
+  - func_opinion
+  - func_ask_info
+  - func_answer_info
+  grammar_milestones:
+  - id: connectors_reason
+    description: Lebo/pretože v jednoduchých súvetiach.
+  - id: aspect_expand
+    description: Rozšírenie aspektu na vysokofrekvenčné páry.
+  practice_types:
+  - guided_writing
+  - opinion_debates
+  - story_retell
+  - gap_fill
+  prerequisites:
+  - a2_genitive_prepositions
+  exit_criteria:
+  - Opíšeš školu/prácu a dáš dôvody.
+  - Rozlíšiš aspekt pri 15–20 pároch.
+- id: b1_case_mastery_round1
+  cefr: B1
+  title: Kasusy v praxi I (automatizácia)
+  vocab_target: 80
+  vocab_domains:
+  - mixed_high_frequency
+  functions:
+  - func_explain
+  - func_narrate
+  - func_request
+  grammar_milestones:
+  - id: case_precision
+    description: Presnosť pádov v predložkových väzbách; animátnosť v akuzatíve.
+  - id: agreement_full
+    description: Zhoda v rode/čísle/páde (adjektíva, zámená).
+  practice_types:
+  - declension_drills
+  - sentence_building
+  - information_gap
+  - flashcards_translation
+  prerequisites:
+  - a2_work_study
+  exit_criteria:
+  - Správne použiješ pád v väčšine vysokofrekvenčných väzieb.
+- id: b1_subordinate_clauses_intro
+  cefr: B1
+  title: 'Súvetia: že, keď, ak, aby'
+  vocab_target: 90
+  vocab_domains:
+  - opinions
+  - reasons
+  - plans
+  functions:
+  - func_explain
+  - func_opinion
+  - func_narrate
+  grammar_milestones:
+  - id: subordination_conjunctions
+    description: že/keby/keď/ak/pretože/aby.
+  - id: word_order_subordinate
+    description: Slovosled vo vedľajšej vete (praktické vzory).
+  - id: punctuation_commas
+    description: Čiarky pri vedľajších vetách (kontrolovateľné).
+  practice_types:
+  - clause_combination
+  - guided_writing
+  - gap_fill
+  - story_retell
+  prerequisites:
+  - b1_case_mastery_round1
+  exit_criteria:
+  - Vytvoríš 10 viet s vedľajšou vetou bez zásadných chýb.
+- id: b1_relative_clauses
+  cefr: B1
+  title: 'Vzťažné vety: ktorý/ktorá/ktoré'
+  vocab_target: 80
+  vocab_domains:
+  - people
+  - objects
+  - descriptions
+  functions:
+  - func_describe
+  - func_explain
+  grammar_milestones:
+  - id: relative_agreement
+    description: Zhodovanie 'ktorý' v rode/čísle/páde.
+  - id: complex_noun_phrases
+    description: Rozšírená menná fráza (opis + vzťažná veta).
+  practice_types:
+  - sentence_building
+  - gap_fill
+  - picture_description
+  - guided_writing
+  prerequisites:
+  - b1_subordinate_clauses_intro
+  exit_criteria:
+  - Opíšeš osobu/vec pomocou vzťažných viet.
+- id: b1_conditional_mood
+  cefr: B1
+  title: Podmieňovací spôsob (by) a keby-vety
+  vocab_target: 80
+  vocab_domains:
+  - hypotheticals
+  - advice
+  - preferences
+  functions:
+  - func_opinion
+  - func_request
+  - func_explain
+  grammar_milestones:
+  - id: conditional_by
+    description: by + l-particíp (robil by som).
+  - id: conditional_clauses
+    description: keby + základné typy.
+  - id: polite_softening
+    description: Zdvorilé zmäkčenie žiadostí.
+  practice_types:
+  - role_play
+  - guided_writing
+  - problem_solving
+  - gap_fill
+  prerequisites:
+  - b1_subordinate_clauses_intro
+  exit_criteria:
+  - Použiješ podmieňovací spôsob v 8–10 vetách.
+- id: b1_aspect_deepening
+  cefr: B1
+  title: Aspekt II (systematizácia)
+  vocab_target: 90
+  vocab_domains:
+  - verbs_high_frequency
+  - daily_actions
+  functions:
+  - func_narrate
+  - func_explain
+  grammar_milestones:
+  - id: aspect_rules_core
+    description: Výber aspektu podľa výsledku/opakovania/trvania.
+  - id: prefix_suffix_patterns
+    description: Najčastejšie vzory tvorby párov.
+  - id: aspect_with_future
+    description: Perfektívne bez prítomného času; budúci tvar.
+  practice_types:
+  - tense_conversion
+  - storytelling
+  - gap_fill
+  - conjugation_drills
+  prerequisites:
+  - b1_conditional_mood
+  exit_criteria:
+  - Správne zvolíš aspekt vo väčšine kontextových úloh.
+- id: b1_narration_past_future
+  cefr: B1
+  title: 'Rozprávanie: minulosť → budúcnosť (súvislý text)'
+  vocab_target: 100
+  vocab_domains:
+  - experiences
+  - travel
+  - work
+  - events
+  functions:
+  - func_narrate
+  - func_explain
+  - func_opinion
+  grammar_milestones:
+  - id: narration_cohesion
+    description: 'Kohézia: najprv/potom/neskôr/nakoniec; pretože; hoci.'
+  - id: tense_aspect_in_story
+    description: Kombinácia časov a aspektu v príbehu.
+  - id: indirect_speech_light
+    description: Základy nepriamo reči (povedal, že…).
+  practice_types:
+  - story_retell
+  - guided_writing
+  - free_conversation
+  - gap_fill
+  prerequisites:
+  - b1_aspect_deepening
+  exit_criteria:
+  - Napíšeš 120–180 slovný príbeh so spojkami.
+- id: b1_opinions_discussion
+  cefr: B1
+  title: 'Diskusia: názory, argumenty'
+  vocab_target: 110
+  vocab_domains:
+  - opinions
+  - society_light
+  - hobbies
+  - media
+  functions:
+  - func_opinion
+  - func_agree_disagree
+  - func_explain
+  grammar_milestones:
+  - id: discourse_markers
+    description: Podľa mňa, myslím si, na jednej strane…, na druhej strane…
+  - id: complex_subordination
+    description: Rozšírené súvetia (príčina, podmienka, účel).
+  - id: word_order_focus
+    description: Fokus a dôraz (flexibilný slovosled).
+  practice_types:
+  - debates
+  - problem_solving
+  - free_conversation
+  - guided_writing
+  prerequisites:
+  - b1_narration_past_future
+  exit_criteria:
+  - Vieš diskutovať 8–10 min na známu tému a reagovať.
+- id: b1_service_scenarios
+  cefr: B1
+  title: 'Komplexné situácie: úrad, reklamácia, telefón'
+  vocab_target: 100
+  vocab_domains:
+  - services
+  - bureaucracy_light
+  - complaints
+  - phone
+  functions:
+  - func_request
+  - func_explain
+  - func_agree_disagree
+  - func_narrate
+  grammar_milestones:
+  - id: polite_formality_register
+    description: Formálny register a vykanie.
+  - id: conditional_in_service
+    description: Podmieňovací spôsob v službách.
+  - id: precision_with_cases
+    description: Pádová presnosť v šablónach.
+  practice_types:
+  - role_play
+  - information_gap
+  - guided_writing
+  - sentence_building
+  prerequisites:
+  - b1_opinions_discussion
+  exit_criteria:
+  - Vieš vybaviť službu a vysvetliť problém v 8–10 vetách.
+- id: b1_final_integration
+  cefr: B1
+  title: B1 Integrácia (mix + slabiny)
+  vocab_target: 120
+  vocab_domains:
+  - mixed_high_frequency
+  functions:
+  - func_introduce
+  - func_request
+  - func_explain
+  - func_narrate
+  - func_opinion
+  grammar_milestones:
+  - id: integrate_all
+    description: Integrácia pádov, časov, aspektu, súvetí a registra.
+  - id: error_reduction
+    description: 'Redukcia chýb: predložka+pád, zhoda, aspekt.'
+  practice_types:
+  - free_conversation
+  - guided_writing
+  - role_play
+  - story_retell
+  - declension_drills
+  prerequisites:
+  - b1_service_scenarios
+  exit_criteria:
+  - 'Stabilne zvládaš B1 situácie: cesta, práca, služby, diskusia, príbeh.'
+source_note: Reconstructed project plan; no embedded citation markers.

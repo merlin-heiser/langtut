@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://langtut.local/schemas/contracts.schema.json",
+  "title": "LangtutContracts",
+  "type": "object",
+  "definitions": {
+    "ModuleStatus": {
+      "type": "string",
+      "enum": ["locked", "available", "preparing", "learning", "credited"]
+    },
+    "GrammarMilestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "CurriculumModule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "cefr", "displayLevel", "title", "vocabTarget", "vocabDomains", "functions", "grammarMilestones", "practiceTypes", "prerequisites", "exitCriteria", "focusTags", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "cefr": { "type": "string", "enum": ["A0", "A1", "A2", "B1"] },
+        "displayLevel": { "type": "string", "enum": ["Pre-A1", "A1", "A2", "B1"] },
+        "title": { "type": "string" },
+        "vocabTarget": { "type": "integer", "minimum": 1 },
+        "vocabDomains": { "type": "array", "items": { "type": "string" } },
+        "functions": { "type": "array", "items": { "type": "string" } },
+        "grammarMilestones": { "type": "array", "items": { "$ref": "#/definitions/GrammarMilestone" } },
+        "practiceTypes": { "type": "array", "items": { "type": "string" } },
+        "prerequisites": { "type": "array", "items": { "type": "string" } },
+        "exitCriteria": { "type": "array", "items": { "type": "string" } },
+        "focusTags": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "type": "string" } },
+        "status": { "$ref": "#/definitions/ModuleStatus" }
+      }
+    },
+    "Curriculum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "language", "targetLevel", "vocabTarget", "exerciseTypes", "modules"],
+      "properties": {
+        "version": { "type": "string" },
+        "language": { "const": "sk" },
+        "targetLevel": { "const": "B1" },
+        "vocabTarget": { "const": 2000 },
+        "exerciseTypes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "modules": { "type": "array", "minItems": 23, "maxItems": 23, "items": { "$ref": "#/definitions/CurriculumModule" } }
+      }
+    },
+    "AnkiMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reachable", "dueReviews", "newCards", "leeches", "lapses7d"],
+      "properties": {
+        "reachable": { "type": "boolean" },
+        "dueReviews": { "type": "integer", "minimum": 0 },
+        "newCards": { "type": "integer", "minimum": 0 },
+        "leeches": { "type": "integer", "minimum": 0 },
+        "lapses7d": { "type": "integer", "minimum": 0 },
+        "version": { "type": "integer" },
+        "error": { "type": "string" }
+      }
+    },
+    "ApiCostSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "weekCost", "totalCost", "weekInputTokens", "weekOutputTokens", "totalInputTokens", "totalOutputTokens", "weekStartedAt", "trackedSince", "pricingVersion"],
+      "properties": {
+        "currency": { "const": "USD" },
+        "weekCost": { "type": "number", "minimum": 0 },
+        "totalCost": { "type": "number", "minimum": 0 },
+        "weekInputTokens": { "type": "integer", "minimum": 0 },
+        "weekOutputTokens": { "type": "integer", "minimum": 0 },
+        "totalInputTokens": { "type": "integer", "minimum": 0 },
+        "totalOutputTokens": { "type": "integer", "minimum": 0 },
+        "weekStartedAt": { "type": "string", "format": "date-time" },
+        "trackedSince": { "type": ["string", "null"], "format": "date-time" },
+        "pricingVersion": { "type": "string" }
+      }
+    },
+    "SessionMode": { "type": "string", "enum": ["OVERLOAD", "RECOVERY", "EXPANSION", "NORMAL"] },
+    "SessionPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "createdAt", "mode", "timeBudgetMin", "reviewCapacity", "newCardBudget", "primaryModuleId", "focusTags", "reasons", "anki"],
+      "properties": {
+        "id": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "mode": { "$ref": "#/definitions/SessionMode" },
+        "timeBudgetMin": { "type": "integer" },
+        "reviewCapacity": { "type": "integer" },
+        "newCardBudget": { "type": "integer" },
+        "primaryModuleId": { "type": ["string", "null"] },
+        "focusTags": { "type": "array", "items": { "type": "string" } },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "anki": { "$ref": "#/definitions/AnkiMetrics" }
+      }
+    },
+    "CandidateItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["itemId", "kind", "moduleId", "slovak", "german", "exampleSlovak", "exampleGerman", "notes", "tags"],
+      "properties": {
+        "itemId": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["vocab", "chunk", "rule"] },
+        "moduleId": { "type": "string" },
+        "slovak": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "german": { "type": "string", "minLength": 1, "maxLength": 260 },
+        "exampleSlovak": { "type": "string", "maxLength": 400 },
+        "exampleGerman": { "type": "string", "maxLength": 400 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "tags": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "type": "string" } },
+        "milestoneId": { "type": "string" },
+        "functionId": { "type": "string" }
+      }
+    },
+    "GeneratedItems": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items"],
+      "properties": { "items": { "type": "array", "items": { "$ref": "#/definitions/CandidateItem" } } }
+    },
+    "VerificationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["results"],
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["itemId", "approved", "issues"],
+            "properties": {
+              "itemId": { "type": "string" },
+              "approved": { "type": "boolean" },
+              "issues": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "TutorTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message", "correction", "explanation", "newExample"],
+      "properties": {
+        "message": { "type": "string" },
+        "correction": { "type": "string" },
+        "explanation": { "type": "string" },
+        "newExample": { "type": "string" }
+      }
+    },
+    "TutorReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["focusTags", "observedErrors", "suggestedReviewItems", "suggestedNewCards", "nextSessionSuggestions"],
+      "properties": {
+        "focusTags": { "type": "array", "items": { "type": "string" } },
+        "observedErrors": { "type": "array", "items": { "type": "string" } },
+        "suggestedReviewItems": { "type": "array", "items": { "type": "string" } },
+        "suggestedNewCards": { "type": "array", "items": { "$ref": "#/definitions/CandidateItem" } },
+        "nextSessionSuggestions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "progress", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "moduleId": { "type": "string" },
+        "status": { "type": "string", "enum": ["queued", "running", "completed", "failed"] },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "message": { "type": "string" },
+        "error": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "PlacementSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "startedAt", "itemsAnswered", "maxItems"],
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "itemsAnswered": { "type": "integer", "minimum": 0 },
+        "maxItems": { "const": 20 },
+        "recommendedModuleId": { "type": "string" },
+        "weakTags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "PlacementItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "level", "prompt", "kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "level": { "type": "string", "enum": ["Pre-A1", "A1", "A2", "B1"] },
+        "prompt": { "type": "string" },
+        "kind": { "type": "string", "enum": ["production", "recognition", "open"] },
+        "choices": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "PlacementStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "startedAt", "itemsAnswered", "maxItems"],
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "itemsAnswered": { "type": "integer", "minimum": 0 },
+        "maxItems": { "const": 20 },
+        "recommendedModuleId": { "type": "string" },
+        "weakTags": { "type": "array", "items": { "type": "string" } },
+        "nextItem": { "$ref": "#/definitions/PlacementItem" },
+        "correct": { "type": "boolean" },
+        "rubric": { "$ref": "#/definitions/PlacementEvaluation" }
+      }
+    },
+    "PlacementEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "feedback", "weakTags"],
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "feedback": { "type": "string" },
+        "weakTags": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "required": ["version"],
+  "properties": { "version": { "type": "string" } }
+}

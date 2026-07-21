@@ -1,0 +1,15 @@
+version: "2026-07-09"
+currency: USD
+models:
+  gpt-5.6-terra:
+    effective_date: "2026-07-01"
+    source: https://developers.openai.com/api/docs/models/gpt-5.6-terra
+    input_per_million: 2.50
+    cached_input_per_million: 0.25
+    output_per_million: 15.00
+  gemini-3.5-flash:
+    effective_date: "2026-07-09"
+    source: https://ai.google.dev/gemini-api/docs/pricing
+    input_per_million: 1.50
+    cached_input_per_million: 0.15
+    output_per_million: 9.00

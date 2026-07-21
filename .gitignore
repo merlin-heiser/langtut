@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+data/*.db
+data/*.db-*
+data/exports/
+.env
+*.log
+.vite/
+.playwright-cli/

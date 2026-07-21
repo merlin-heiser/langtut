@@ -1,0 +1,99 @@
+version: '2.0'
+policy:
+  max_tags_per_card: 3
+  reject_unknown_tags: true
+  prefer:
+  - topic
+  - grammar
+  - function
+  error_tags_for_reporting_by_default: true
+categories:
+  topic:
+  - topic_alphabet
+  - topic_classroom
+  - topic_identity
+  - topic_family
+  - topic_people
+  - topic_numbers
+  - topic_time
+  - topic_daily_life
+  - topic_hobbies
+  - topic_food
+  - topic_restaurant
+  - topic_shopping
+  - topic_clothing
+  - topic_home
+  - topic_city
+  - topic_transport
+  - topic_travel
+  - topic_accommodation
+  - topic_health
+  - topic_services
+  - topic_work
+  - topic_education
+  - topic_weather
+  - topic_events
+  - topic_opinion
+  - topic_media
+  grammar:
+  - grammar_pronunciation
+  - grammar_pronouns
+  - grammar_gender
+  - grammar_plural
+  - grammar_adjectives
+  - grammar_comparison
+  - case_nominative
+  - case_accusative
+  - case_genitive
+  - case_dative
+  - case_locative
+  - case_instrumental
+  - verb_present
+  - verb_past
+  - verb_future
+  - verb_aspect
+  - verb_reflexive
+  - verb_motion
+  - verb_imperative
+  - verb_conditional
+  - syntax_basic
+  - syntax_questions
+  - syntax_negation
+  - syntax_subordinate
+  - syntax_relative
+  - syntax_connectors
+  - syntax_word_order
+  function:
+  - func_greet
+  - func_spell
+  - func_introduce
+  - func_ask_info
+  - func_answer_info
+  - func_request
+  - func_order
+  - func_describe
+  - func_explain
+  - func_narrate
+  - func_compare
+  - func_opinion
+  - func_agree_disagree
+  error:
+  - error_orthography
+  - error_grammar_case
+  - error_grammar_preposition_case
+  - error_grammar_agreement
+  - error_grammar_verb_form
+  - error_grammar_aspect
+  - error_grammar_word_order
+  - error_lexicon_word_choice
+  - error_lexicon_collocation
+  - error_lexicon_recall
+  - error_pragmatics_register
+  - error_style_awkward
+  - error_other
+validation:
+  reject_empty_front_or_back: true
+  max_front_chars: 200
+  max_back_chars: 260
+  require_one_idea_per_card: true
+  unicode_normalization: NFC

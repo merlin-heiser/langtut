@@ -1,0 +1,25 @@
+{
+  "name": "@langtut/api",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -b",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "latest",
+    "@google/genai": "latest",
+    "@langtut/contracts": "0.1.0",
+    "@langtut/domain": "0.1.0",
+    "ajv": "latest",
+    "better-sqlite3": "latest",
+    "fastify": "latest",
+    "openai": "latest",
+    "yaml": "latest"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "latest",
+    "tsx": "latest"
+  }
+}

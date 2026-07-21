@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://langtut.local/schemas/provider-tasks.schema.json",
+  "type": "object",
+  "required": ["version", "tasks"],
+  "properties": {
+    "version": { "type": "string" },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider", "model", "quality", "latency", "max_output_tokens", "schema"],
+        "properties": {
+          "provider": { "enum": ["openai", "gemini"] },
+          "model": { "type": "string" },
+          "quality": { "type": "string" },
+          "latency": { "type": "string" },
+          "reasoning_effort": { "enum": ["none", "low", "medium", "high"] },
+          "max_output_tokens": { "type": "integer", "minimum": 1 },
+          "schema": { "type": "string" }
+        }
+      }
+    }
+  }
+}
