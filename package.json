@@ -7,7 +7,7 @@
   "scripts": {
     "postinstall": "node scripts/link-local-workspaces.mjs",
     "predev": "node scripts/link-local-workspaces.mjs",
-    "dev": "concurrently -n api,web -c cyan,magenta \"npm --prefix apps/api run dev\" \"npm --prefix apps/web run dev\"",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm --prefix apps/api run dev\" \"node scripts/start-web-when-api-ready.mjs\"",
     "prebuild": "node scripts/link-local-workspaces.mjs",
     "build": "npm run generate && npm run build --workspaces --if-present",
     "generate": "node scripts/generate-contracts.mjs",
