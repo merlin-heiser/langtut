@@ -1,0 +1,9 @@
+schemaVersion: 1
+id: english-norwegian-demo
+version: 1.0.0
+name: English – Norwegian Demo
+targetLanguage: { code: en, name: English }
+sourceLanguage: { code: nb, name: Norsk bokmål }
+targetLevel: A1
+ankiDeck: "Langtut::English – Norwegian"
+

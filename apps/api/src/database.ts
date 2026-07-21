@@ -49,19 +49,19 @@ export class Store {
     this.db.prepare("DELETE FROM settings WHERE key = ?").run(key);
   }
 
-  getProgress(): ProgressByModule {
-    const rows = this.db.prepare("SELECT module_id, status FROM module_progress").all() as Array<{ module_id: string; status: ModuleStatus }>;
+  getProgress(packageId: string): ProgressByModule {
+    const rows = this.db.prepare("SELECT module_id, status FROM module_progress WHERE package_id=?").all(packageId) as Array<{ module_id: string; status: ModuleStatus }>;
     return Object.fromEntries(rows.map((row) => [row.module_id, row.status]));
   }
 
-  setStatus(moduleId: string, status: ModuleStatus): void {
-    this.db.prepare(`INSERT INTO module_progress(module_id,status,updated_at) VALUES (?,?,?)
-      ON CONFLICT(module_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`)
-      .run(moduleId, status, new Date().toISOString());
+  setStatus(packageId: string, moduleId: string, status: ModuleStatus): void {
+    this.db.prepare(`INSERT INTO module_progress(package_id,module_id,status,updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(package_id,module_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`)
+      .run(packageId, moduleId, status, new Date().toISOString());
   }
 
-  getEvidence(moduleId: string): ModuleEvidence {
-    const row = this.db.prepare("SELECT * FROM module_progress WHERE module_id = ?").get(moduleId) as Record<string, unknown> | undefined;
+  getEvidence(packageId: string, moduleId: string): ModuleEvidence {
+    const row = this.db.prepare("SELECT * FROM module_progress WHERE package_id=? AND module_id = ?").get(packageId, moduleId) as Record<string, unknown> | undefined;
     return {
       importedVocab: Number(row?.imported_vocab ?? 0),
       importedFunctions: JSON.parse(String(row?.imported_functions_json ?? "[]")),
@@ -70,43 +70,43 @@ export class Store {
     };
   }
 
-  saveEvidence(moduleId: string, evidence: ModuleEvidence, status: ModuleStatus): void {
-    this.db.prepare(`INSERT INTO module_progress(module_id,status,imported_vocab,imported_functions_json,imported_milestones_json,attempted_milestones_json,updated_at)
-      VALUES (?,?,?,?,?,?,?) ON CONFLICT(module_id) DO UPDATE SET status=excluded.status, imported_vocab=excluded.imported_vocab,
+  saveEvidence(packageId: string, moduleId: string, evidence: ModuleEvidence, status: ModuleStatus): void {
+    this.db.prepare(`INSERT INTO module_progress(package_id,module_id,status,imported_vocab,imported_functions_json,imported_milestones_json,attempted_milestones_json,updated_at)
+      VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(package_id,module_id) DO UPDATE SET status=excluded.status, imported_vocab=excluded.imported_vocab,
       imported_functions_json=excluded.imported_functions_json, imported_milestones_json=excluded.imported_milestones_json,
       attempted_milestones_json=excluded.attempted_milestones_json, updated_at=excluded.updated_at`)
-      .run(moduleId, status, evidence.importedVocab, JSON.stringify(evidence.importedFunctions), JSON.stringify(evidence.importedMilestones), JSON.stringify(evidence.attemptedMilestones), new Date().toISOString());
+      .run(packageId, moduleId, status, evidence.importedVocab, JSON.stringify(evidence.importedFunctions), JSON.stringify(evidence.importedMilestones), JSON.stringify(evidence.attemptedMilestones), new Date().toISOString());
   }
 
   savePlan(plan: SessionPlan): void {
-    this.db.prepare("INSERT INTO session_plans(id,payload_json,created_at) VALUES (?,?,?)").run(plan.id, JSON.stringify(plan), plan.createdAt);
+    this.db.prepare("INSERT INTO session_plans(id,payload_json,created_at,package_id) VALUES (?,?,?,?)").run(plan.id, JSON.stringify(plan), plan.createdAt, plan.packageId);
   }
 
-  savePlacement(placement: { id: string; status: string; startedAt: string }): void {
+  savePlacement(placement: { id: string; packageId: string; status: string; startedAt: string }): void {
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO placement_sessions(id,status,payload_json,created_at,updated_at) VALUES (?,?,?,?,?)
+    this.db.prepare(`INSERT INTO placement_sessions(id,status,payload_json,created_at,updated_at,package_id) VALUES (?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload_json=excluded.payload_json,updated_at=excluded.updated_at`)
-      .run(placement.id, placement.status, JSON.stringify(placement), placement.startedAt, now);
+      .run(placement.id, placement.status, JSON.stringify(placement), placement.startedAt, now, placement.packageId);
   }
 
-  getPlacement<T>(id: string): T | null {
-    const row = this.db.prepare("SELECT payload_json FROM placement_sessions WHERE id=?").get(id) as { payload_json: string } | undefined;
+  getPlacement<T>(packageId: string, id: string): T | null {
+    const row = this.db.prepare("SELECT payload_json FROM placement_sessions WHERE package_id=? AND id=?").get(packageId, id) as { payload_json: string } | undefined;
     return row ? JSON.parse(row.payload_json) as T : null;
   }
 
-  getLatestPlacement<T>(): T | null {
-    const row = this.db.prepare("SELECT payload_json FROM placement_sessions ORDER BY updated_at DESC LIMIT 1").get() as { payload_json: string } | undefined;
+  getLatestPlacement<T>(packageId: string): T | null {
+    const row = this.db.prepare("SELECT payload_json FROM placement_sessions WHERE package_id=? ORDER BY updated_at DESC LIMIT 1").get(packageId) as { payload_json: string } | undefined;
     return row ? JSON.parse(row.payload_json) as T : null;
   }
 
-  createSession(id: string, planId: string | null, moduleId: string | null): void {
-    this.db.prepare("INSERT INTO sessions(id,plan_id,module_id,status,created_at) VALUES (?,?,?,?,?)")
-      .run(id, planId, moduleId, "active", new Date().toISOString());
-    this.appendSessionEvent(id, "session_started", { planId, moduleId });
+  createSession(packageId: string, id: string, planId: string | null, moduleId: string | null, activityId?: string): void {
+    this.db.prepare("INSERT INTO sessions(id,plan_id,module_id,status,created_at,package_id) VALUES (?,?,?,?,?,?)")
+      .run(id, planId, moduleId, "active", new Date().toISOString(), packageId);
+    this.appendSessionEvent(id, "session_started", { packageId, planId, moduleId, activityId });
   }
 
   getSession(id: string): Record<string, unknown> | null {
-    const row = this.db.prepare("SELECT id,plan_id AS planId,module_id AS moduleId,status,created_at AS createdAt,completed_at AS completedAt FROM sessions WHERE id=?").get(id) as Record<string, unknown> | undefined;
+    const row = this.db.prepare("SELECT id,package_id AS packageId,plan_id AS planId,module_id AS moduleId,status,created_at AS createdAt,completed_at AS completedAt FROM sessions WHERE id=?").get(id) as Record<string, unknown> | undefined;
     return row ?? null;
   }
 
@@ -128,8 +128,8 @@ export class Store {
   }
 
   createJob(job: Job): void {
-    this.db.prepare("INSERT INTO jobs(id,kind,module_id,status,progress,message,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(job.id, job.kind, job.moduleId ?? null, job.status, job.progress, job.message ?? null, job.error ?? null, job.createdAt, job.updatedAt);
+    this.db.prepare("INSERT INTO jobs(id,kind,module_id,status,progress,message,error,created_at,updated_at,package_id) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(job.id, job.kind, job.moduleId ?? null, job.status, job.progress, job.message ?? null, job.error ?? null, job.createdAt, job.updatedAt, job.packageId);
   }
 
   updateJob(id: string, patch: Partial<Job>): Job {
@@ -144,15 +144,22 @@ export class Store {
   getJob(id: string): Job | null {
     const row = this.db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     return row ? {
-      id: String(row.id), kind: String(row.kind), moduleId: row.module_id ? String(row.module_id) : undefined,
+      id: String(row.id), packageId: String(row.package_id), kind: String(row.kind), moduleId: row.module_id ? String(row.module_id) : undefined,
       status: String(row.status) as Job["status"], progress: Number(row.progress), message: row.message ? String(row.message) : undefined,
       error: row.error ? String(row.error) : undefined, createdAt: String(row.created_at), updatedAt: String(row.updated_at),
     } : null;
   }
 
-  getLatestJob(): Job | null {
-    const row = this.db.prepare("SELECT id,kind,module_id AS moduleId,status,progress,message,error,created_at AS createdAt,updated_at AS updatedAt FROM jobs ORDER BY updated_at DESC LIMIT 1").get() as Job | undefined;
+  getLatestJob(packageId: string): Job | null {
+    const row = this.db.prepare("SELECT id,package_id AS packageId,kind,module_id AS moduleId,status,progress,message,error,created_at AS createdAt,updated_at AS updatedAt FROM jobs WHERE package_id=? ORDER BY updated_at DESC LIMIT 1").get(packageId) as Job | undefined;
     return row ?? null;
+  }
+
+  hasActiveWork(packageId: string): boolean {
+    const activeJob = this.db.prepare("SELECT 1 FROM jobs WHERE package_id=? AND status IN ('queued','running') LIMIT 1").get(packageId);
+    const activeSession = this.db.prepare("SELECT 1 FROM sessions WHERE package_id=? AND status='active' LIMIT 1").get(packageId);
+    const activePlacement = this.db.prepare("SELECT 1 FROM placement_sessions WHERE package_id=? AND status='active' LIMIT 1").get(packageId);
+    return Boolean(activeJob || activeSession || activePlacement);
   }
 
   recordApiUsage(event: { provider: string; model: string; taskId: string; inputTokens: number; cachedInputTokens: number; outputTokens: number; costMicrousd: number; pricingVersion: string; createdAt?: string }): void {
@@ -180,64 +187,68 @@ export class Store {
     };
   }
 
-  countItems(moduleId: string, kind: string): number {
-    const row = this.db.prepare("SELECT count(*) AS count FROM generated_items WHERE module_id=? AND kind=? AND validation_status='imported'").get(moduleId, kind) as { count: number };
+  countItems(packageId: string, moduleId: string, kind: string): number {
+    const row = this.db.prepare("SELECT count(*) AS count FROM generated_items WHERE package_id=? AND module_id=? AND kind=? AND validation_status='imported'").get(packageId, moduleId, kind) as { count: number };
     return row.count;
   }
 
-  importedItems<T>(moduleId: string, kind: string): Array<{ item: T; ankiNoteId?: number }> {
-    const rows = this.db.prepare("SELECT payload_json,anki_note_id FROM generated_items WHERE module_id=? AND kind=? AND validation_status='imported'").all(moduleId, kind) as Array<{ payload_json: string; anki_note_id: number | null }>;
+  hasImportedItem(packageId: string, itemId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM generated_items WHERE package_id=? AND item_id=? AND validation_status='imported'").get(packageId, itemId));
+  }
+
+  importedItems<T>(packageId: string, moduleId: string, kind: string): Array<{ item: T; ankiNoteId?: number }> {
+    const rows = this.db.prepare("SELECT payload_json,anki_note_id FROM generated_items WHERE package_id=? AND module_id=? AND kind=? AND validation_status='imported'").all(packageId, moduleId, kind) as Array<{ payload_json: string; anki_note_id: number | null }>;
     return rows.map((row) => ({ item: JSON.parse(row.payload_json) as T, ...(row.anki_note_id ? { ankiNoteId: row.anki_note_id } : {}) }));
   }
 
-  retractGenerated(item: { itemId: string; moduleId: string }, payload: unknown, issues: string[]): void {
+  retractGenerated(packageId: string, item: { itemId: string; moduleId: string }, payload: unknown, issues: string[]): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
-      this.db.prepare("UPDATE generated_items SET validation_status='retracted' WHERE item_id=?").run(item.itemId);
-      this.db.prepare("INSERT INTO quarantine(item_id,module_id,issues_json,payload_json,created_at) VALUES (?,?,?,?,?)")
-        .run(item.itemId, item.moduleId, JSON.stringify(issues), JSON.stringify(payload), now);
-      this.db.prepare("INSERT INTO import_events(item_id,action,payload_json,created_at) VALUES (?,?,?,?)")
-        .run(item.itemId, "retracted", JSON.stringify({ moduleId: item.moduleId, issues }), now);
+      this.db.prepare("UPDATE generated_items SET validation_status='retracted' WHERE package_id=? AND item_id=?").run(packageId, item.itemId);
+      this.db.prepare("INSERT INTO quarantine(item_id,module_id,issues_json,payload_json,created_at,package_id) VALUES (?,?,?,?,?,?)")
+        .run(item.itemId, item.moduleId, JSON.stringify(issues), JSON.stringify(payload), now, packageId);
+      this.db.prepare("INSERT INTO import_events(item_id,action,payload_json,created_at,package_id) VALUES (?,?,?,?,?)")
+        .run(item.itemId, "retracted", JSON.stringify({ packageId, moduleId: item.moduleId, issues }), now, packageId);
     })();
   }
 
-  importedCoverage(moduleId: string, kind: string, field: "functionId" | "milestoneId"): string[] {
-    const rows = this.db.prepare("SELECT payload_json FROM generated_items WHERE module_id=? AND kind=? AND validation_status='imported'").all(moduleId, kind) as Array<{ payload_json: string }>;
+  importedCoverage(packageId: string, moduleId: string, kind: string, field: "functionId" | "milestoneId"): string[] {
+    const rows = this.db.prepare("SELECT payload_json FROM generated_items WHERE package_id=? AND module_id=? AND kind=? AND validation_status='imported'").all(packageId, moduleId, kind) as Array<{ payload_json: string }>;
     return [...new Set(rows.map((row) => (JSON.parse(row.payload_json) as Record<string, unknown>)[field]).filter((value): value is string => typeof value === "string"))];
   }
 
-  existingFronts(): string[] {
-    const rows = this.db.prepare("SELECT normalized_slovak FROM generated_items WHERE validation_status IN ('approved','imported')").all() as Array<{ normalized_slovak: string }>;
-    return rows.map((row) => row.normalized_slovak);
+  existingFronts(packageId: string): string[] {
+    const rows = this.db.prepare("SELECT normalized_target FROM generated_items WHERE package_id=? AND validation_status IN ('approved','imported')").all(packageId) as Array<{ normalized_target: string }>;
+    return rows.map((row) => row.normalized_target);
   }
 
-  generationExclusions(moduleId: string): string[] {
-    const quarantined = this.db.prepare("SELECT payload_json FROM quarantine WHERE module_id=? AND resolved_at IS NULL").all(moduleId) as Array<{ payload_json: string }>;
-    const fronts = [...this.existingFronts()];
+  generationExclusions(packageId: string, moduleId: string): string[] {
+    const quarantined = this.db.prepare("SELECT payload_json FROM quarantine WHERE package_id=? AND module_id=? AND resolved_at IS NULL").all(packageId, moduleId) as Array<{ payload_json: string }>;
+    const fronts = [...this.existingFronts(packageId)];
     for (const row of quarantined) {
-      const payload = JSON.parse(row.payload_json) as { slovak?: unknown };
-      if (typeof payload.slovak === "string" && payload.slovak.trim()) fronts.push(payload.slovak.normalize("NFC").trim());
+      const payload = JSON.parse(row.payload_json) as { target?: unknown };
+      if (typeof payload.target === "string" && payload.target.trim()) fronts.push(payload.target.normalize("NFC").trim());
     }
     return [...new Set(fronts)];
   }
 
-  saveGenerated(item: { itemId: string; moduleId: string; kind: string; normalized: string; payload: unknown }, status: string, ankiNoteId?: number): void {
+  saveGenerated(packageId: string, item: { itemId: string; moduleId: string; kind: string; normalized: string; payload: unknown }, status: string, ankiNoteId?: number): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
-      this.db.prepare(`INSERT OR REPLACE INTO generated_items(item_id,module_id,kind,normalized_slovak,payload_json,validation_status,anki_note_id,created_at)
-        VALUES (?,?,?,?,?,?,?,?)`).run(item.itemId, item.moduleId, item.kind, item.normalized, JSON.stringify(item.payload), status, ankiNoteId ?? null, now);
-      this.db.prepare("INSERT INTO import_events(item_id,action,payload_json,created_at) VALUES (?,?,?,?)")
-        .run(item.itemId, status, JSON.stringify({ moduleId: item.moduleId, kind: item.kind, ankiNoteId: ankiNoteId ?? null }), now);
+      this.db.prepare(`INSERT OR REPLACE INTO generated_items(package_id,item_id,module_id,kind,normalized_target,payload_json,validation_status,anki_note_id,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(packageId, item.itemId, item.moduleId, item.kind, item.normalized, JSON.stringify(item.payload), status, ankiNoteId ?? null, now);
+      this.db.prepare("INSERT INTO import_events(item_id,action,payload_json,created_at,package_id) VALUES (?,?,?,?,?)")
+        .run(item.itemId, status, JSON.stringify({ packageId, moduleId: item.moduleId, kind: item.kind, ankiNoteId: ankiNoteId ?? null }), now, packageId);
     })();
   }
 
-  quarantine(item: { itemId: string; moduleId: string }, payload: unknown, issues: string[]): void {
-    this.db.prepare("INSERT INTO quarantine(item_id,module_id,issues_json,payload_json,created_at) VALUES (?,?,?,?,?)")
-      .run(item.itemId, item.moduleId, JSON.stringify(issues), JSON.stringify(payload), new Date().toISOString());
+  quarantine(packageId: string, item: { itemId: string; moduleId: string }, payload: unknown, issues: string[]): void {
+    this.db.prepare("INSERT INTO quarantine(item_id,module_id,issues_json,payload_json,created_at,package_id) VALUES (?,?,?,?,?,?)")
+      .run(item.itemId, item.moduleId, JSON.stringify(issues), JSON.stringify(payload), new Date().toISOString(), packageId);
   }
 
-  listQuarantine(): unknown[] {
-    return this.db.prepare("SELECT id,item_id AS itemId,module_id AS moduleId,issues_json AS issues,payload_json AS payload,created_at AS createdAt FROM quarantine WHERE resolved_at IS NULL ORDER BY id DESC").all()
+  listQuarantine(packageId: string): unknown[] {
+    return this.db.prepare("SELECT id,package_id AS packageId,item_id AS itemId,module_id AS moduleId,issues_json AS issues,payload_json AS payload,created_at AS createdAt FROM quarantine WHERE package_id=? AND resolved_at IS NULL ORDER BY id DESC").all(packageId)
       .map((row: any) => ({ ...row, issues: JSON.parse(row.issues), payload: JSON.parse(row.payload) }));
   }
 

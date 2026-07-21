@@ -10,6 +10,8 @@ class FakeAnki extends AnkiClient {
 
   override async invoke<T>(action: string, params: Record<string, any> = {}): Promise<T> {
     if (action === "version") return 6 as T;
+    if (action === "findNotes") return [] as T;
+    if (action === "addTags") return undefined as T;
     if (action === "findCards") { this.queries.push(params.query); return [] as T; }
     if (action === "modelNames") return [...this.models.keys()] as T;
     if (action === "deckNames") return [...this.decks] as T;
@@ -39,9 +41,9 @@ describe("managed Anki models", () => {
 
   it("does not modify a same-named foreign model", async () => {
     const anki = new FakeAnki();
-    anki.models.set("SlovakTutorVocab", { fields: ["Front"], css: ".card{}", templates: {} });
+    anki.models.set("LangtutVocabV1", { fields: ["Front"], css: ".card{}", templates: {} });
     const preview = await anki.setupPreview();
-    expect(preview.models.find(({ name }) => name === "SlovakTutorVocab")?.action).toBe("conflict");
+    expect(preview.models.find(({ name }) => name === "LangtutVocabV1")?.action).toBe("conflict");
     await expect(anki.applySetup()).rejects.toThrow(/Sentinel/);
   });
 
@@ -50,5 +52,6 @@ describe("managed Anki models", () => {
     await anki.metrics();
     expect(anki.queries).toHaveLength(4);
     expect(anki.queries.every((query) => query.includes("tag:langtut"))).toBe(true);
+    expect(anki.queries.every((query) => query.includes("tag:package::slowakisch-deutsch"))).toBe(true);
   });
 });

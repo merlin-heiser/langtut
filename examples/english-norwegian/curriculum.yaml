@@ -1,0 +1,14 @@
+version: 1.0.0
+modules:
+  - id: introductions
+    level: A1
+    title: Introductions
+    vocabTarget: 3
+    vocabDomains: [people, greetings]
+    functions: [introduce-yourself]
+    grammarMilestones: []
+    practiceTypes: [three-person-conversation]
+    activities: [three-person-cafe]
+    prerequisites: []
+    exitCriteria: [take-part-in-an-introduction]
+    focusTags: [greetings]

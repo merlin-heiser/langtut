@@ -1,10 +1,49 @@
 openapi: 3.1.0
 info:
-  title: Slowakisch AI Tutor API
+  title: Langtut Learning Package Player API
   version: 0.1.0
 servers:
   - url: http://localhost:3210/api/v1
 paths:
+  /packages:
+    get:
+      operationId: listLearningPackages
+      responses:
+        '200': { description: Installierte Pakete und aktive Paket-ID }
+  /packages/import:
+    post:
+      operationId: importLearningPackage
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties: { file: { type: string, format: binary } }
+      responses:
+        '201': { description: Paket installiert oder aktualisiert }
+        '400': { description: Paket ungültig }
+  /packages/{id}:
+    get:
+      operationId: getLearningPackage
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Paketmetadaten und Fähigkeiten }
+  /packages/{id}/activate:
+    post:
+      operationId: activateLearningPackage
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Paket aktiviert }
+        '409': { description: Aktives Paket hat laufende Arbeit }
+  /activities:
+    get:
+      operationId: listLearningActivities
+      responses:
+        '200': { description: Deklarative Lernmethoden des aktiven Pakets }
   /status:
     get:
       operationId: getStatus
@@ -135,6 +174,22 @@ paths:
           content:
             application/json:
               schema: { $ref: '../schemas/reports.schema.json' }
+  /sessions/{id}/activity-turns:
+    post:
+      operationId: executeActivityTurn
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties: { message: { type: string } }
+      responses:
+        '200': { description: Rollenreaktionen gemäß deklarativer Lernmethode }
+        '409': { description: Aktivität beendet oder nicht ausführbar }
   /modules/{id}/milestones/{milestoneId}/attempt:
     post:
       operationId: recordMilestoneAttempt

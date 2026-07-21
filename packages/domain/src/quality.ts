@@ -1,21 +1,21 @@
 import type { CandidateItem } from "@langtut/contracts";
 
-export function normalizeSlovak(value: string): string {
+export function normalizeTarget(value: string): string {
   return value.normalize("NFC").trim().replace(/\s+/g, " ");
 }
 
-export function stripDiacritics(value: string): string {
-  return normalizeSlovak(value).normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC").toLocaleLowerCase("sk");
+export function stripDiacritics(value: string, locale?: string): string {
+  return normalizeTarget(value).normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC").toLocaleLowerCase(locale);
 }
 
 export function validateCandidate(item: CandidateItem, allowedTags: Set<string>): string[] {
   const issues: string[] = [];
   if (!item.itemId || !item.moduleId) issues.push("missing_identity");
-  if (!item.slovak.trim() || !item.german.trim()) issues.push("empty_front_or_back");
-  if (item.slovak !== item.slovak.normalize("NFC") || item.exampleSlovak !== item.exampleSlovak.normalize("NFC")) issues.push("not_nfc");
+  if (!item.target.trim() || !item.source.trim()) issues.push("empty_front_or_back");
+  if (item.target !== item.target.normalize("NFC") || item.exampleTarget !== item.exampleTarget.normalize("NFC")) issues.push("not_nfc");
   if (item.tags.length > 3) issues.push("too_many_domain_tags");
   if (item.tags.some((tag) => !allowedTags.has(tag))) issues.push("unknown_tag");
-  if (item.slovak.length > 200 || item.german.length > 260) issues.push("content_too_long");
+  if (item.target.length > 200 || item.source.length > 260) issues.push("content_too_long");
   return issues;
 }
 
@@ -36,15 +36,15 @@ const lowercaseClosedClass = new Set(["ja", "ty", "on", "ona", "ono", "my", "vy"
  * Vocab notes count lexical competence. Labels for grammar/phonology, isolated
  * symbols and cells of an inflection paradigm belong to rules or exercises.
  */
-export function validateLearningRole(item: CandidateItem): string[] {
+export function validateLearningRole(item: CandidateItem, targetLanguageCode = "sk"): string[] {
   if (item.kind !== "vocab") return [];
   const issues: string[] = [];
-  const front = stripDiacritics(item.slovak);
-  if (/^\p{L}$/u.test(item.slovak.trim())) issues.push("vocab_is_symbol_not_lexeme");
-  if (metalanguageFronts.has(front) || metalanguageGerman.test(item.german)) issues.push("vocab_is_metalanguage");
-  if (["makky", "tvrdy"].includes(front) && phonologyContext.test(`${item.german} ${item.notes} ${item.exampleGerman}`)) issues.push("vocab_is_metalanguage");
+  const front = stripDiacritics(item.target, targetLanguageCode);
+  if (/^\p{L}$/u.test(item.target.trim())) issues.push("vocab_is_symbol_not_lexeme");
+  if (targetLanguageCode === "sk" && (metalanguageFronts.has(front) || metalanguageGerman.test(item.source))) issues.push("vocab_is_metalanguage");
+  if (targetLanguageCode === "sk" && ["makky", "tvrdy"].includes(front) && phonologyContext.test(`${item.source} ${item.notes} ${item.exampleSource}`)) issues.push("vocab_is_metalanguage");
   if (paradigmMarker.test(item.notes)) issues.push("vocab_is_inflection_cell");
-  if (lowercaseClosedClass.has(front) && item.slovak !== item.slovak.toLocaleLowerCase("sk")) issues.push("vocab_noncanonical_dictionary_form");
+  if (targetLanguageCode === "sk" && lowercaseClosedClass.has(front) && item.target !== item.target.toLocaleLowerCase("sk")) issues.push("vocab_noncanonical_dictionary_form");
   return [...new Set(issues)];
 }
 

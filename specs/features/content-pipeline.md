@@ -8,7 +8,7 @@ aufgelöst, da strukturierte Provider-Ausgaben keine repository-lokalen `$ref`-Z
 auflösen können.
 Vokabeln werden in Batches von höchstens 20 erzeugt.
 Jeder Ersatzbatch erhält die curriculumweit bereits importierten sowie die im Modul
-quarantänisierten slowakischen Vorderseiten als Ausschlussliste. Der erste Bedarf plus
+quarantänisierten Zielsprachen-Vorderseiten des aktiven Pakets als Ausschlussliste. Der erste Bedarf plus
 höchstens zwei Ersatzbatches begrenzt unnötige Provideraufrufe. Dubletten innerhalb
 desselben Batches werden ebenfalls deterministisch erkannt.
 

@@ -17,7 +17,7 @@ export const defaultPlannerConfig: PlannerConfig = {
   expansionRatio: 0.5,
 };
 
-export function createSessionPlan(anki: AnkiMetrics, module: CurriculumModule | null, config: PlannerConfig = defaultPlannerConfig): SessionPlan {
+export function createSessionPlan(anki: AnkiMetrics, module: CurriculumModule | null, config: PlannerConfig = defaultPlannerConfig, packageId = "slowakisch-deutsch"): SessionPlan {
   const capacity = config.timeBudgetMin * config.reviewsPerMinute;
   const reasons: string[] = [];
   let mode: SessionMode;
@@ -45,6 +45,7 @@ export function createSessionPlan(anki: AnkiMetrics, module: CurriculumModule | 
   }
   return {
     id: randomUUID(),
+    packageId,
     createdAt: new Date().toISOString(),
     mode,
     timeBudgetMin: config.timeBudgetMin,

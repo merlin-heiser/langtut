@@ -1,0 +1,13 @@
+schemaVersion: 1
+id: slowakisch-deutsch
+version: 1.0.0
+name: Slowakisch – Deutsch
+targetLanguage:
+  code: sk
+  name: Slowakisch
+sourceLanguage:
+  code: de
+  name: Deutsch
+targetLevel: B1
+ankiDeck: "Langtut::Slowakisch – Deutsch"
+

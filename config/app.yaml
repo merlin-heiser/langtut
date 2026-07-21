@@ -7,10 +7,6 @@ session:
   expansion_ratio: 0.5
 anki:
   url: http://localhost:8765
-  deck: Slovak Tutor
+  deck: Langtut
   api_key_env: ANKI_CONNECT_KEY
-curriculum:
-  recovery_roadmap: slowakisch_ai_tutor_recovery_bundle/roadmap_a0_b1.yaml
-  recovery_tags: slowakisch_ai_tutor_recovery_bundle/tag_schema.yaml
-  focus_tags: curriculum/module_focus_tags.yaml
 models: config/model_tasks.yaml

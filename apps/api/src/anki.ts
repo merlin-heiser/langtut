@@ -3,6 +3,7 @@ import type { AnkiMetrics, CandidateItem } from "@langtut/contracts";
 type InvokeResponse<T> = { result: T; error: string | null };
 
 export interface AnkiGateway {
+  configurePackage?(packageId: string, deck: string): void;
   metrics(): Promise<AnkiMetrics>;
   setupPreview(): Promise<SetupPreview>;
   applySetup(): Promise<SetupPreview>;
@@ -11,9 +12,11 @@ export interface AnkiGateway {
 }
 
 export class AnkiClient implements AnkiGateway {
-  constructor(private readonly url: string, private readonly deck: string, private key?: string) {}
+  private packageId = "slowakisch-deutsch";
+  constructor(private readonly url: string, private deck: string, private key?: string) {}
 
   configureKey(key?: string): void { this.key = key; }
+  configurePackage(packageId: string, deck: string): void { this.packageId = packageId; this.deck = deck; }
 
   async invoke<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
     const controller = new AbortController();
@@ -37,11 +40,16 @@ export class AnkiClient implements AnkiGateway {
   async metrics(): Promise<AnkiMetrics> {
     try {
       const version = await this.invoke<number>("version");
+      if (this.packageId === "slowakisch-deutsch") {
+        const legacy = await this.invoke<number[]>("findNotes", { query: "tag:langtut -tag:package::*" });
+        if (legacy.length) await this.invoke("addTags", { notes: legacy, tags: `package::${this.packageId}` });
+      }
+      const packageQuery = `tag:langtut tag:package::${this.packageId}`;
       const [due, fresh, leeches, lapses] = await Promise.all([
-        this.invoke<number[]>("findCards", { query: "tag:langtut is:due" }),
-        this.invoke<number[]>("findCards", { query: "tag:langtut is:new" }),
-        this.invoke<number[]>("findCards", { query: "tag:langtut tag:leech" }),
-        this.invoke<number[]>("findCards", { query: "tag:langtut rated:7:1" }),
+        this.invoke<number[]>("findCards", { query: `${packageQuery} is:due` }),
+        this.invoke<number[]>("findCards", { query: `${packageQuery} is:new` }),
+        this.invoke<number[]>("findCards", { query: `${packageQuery} tag:leech` }),
+        this.invoke<number[]>("findCards", { query: `${packageQuery} rated:7:1` }),
       ]);
       return { reachable: true, version, dueReviews: due.length, newCards: fresh.length, leeches: leeches.length, lapses7d: lapses.length };
     } catch (error) {
@@ -116,8 +124,8 @@ export class AnkiClient implements AnkiGateway {
     const notes = items.map((item) => ({
       deckName: this.deck,
       modelName: modelNameFor(item.kind),
-      fields: fieldsFor(item),
-      tags: ["langtut", `module::${item.moduleId}`, `kind::${item.kind}`, ...item.tags],
+      fields: fieldsFor(item, this.packageId),
+      tags: ["langtut", `package::${this.packageId}`, `module::${item.moduleId}`, `kind::${item.kind}`, ...item.tags],
       options: { allowDuplicate: false, duplicateScope: "deck" },
     }));
     const canAdd = await this.invoke<boolean[]>("canAddNotes", { notes });
@@ -134,41 +142,41 @@ export class AnkiClient implements AnkiGateway {
 
 const MANAGED_SENTINEL = "langtut-managed:v1";
 const SCHEMA_HASH = "sha256:6a8334af11a42445";
-const commonFields = ["ItemId", "ModuleId", "Source", "SchemaVersion"];
-const languageFields = ["Slovak", "German", "ExampleSlovak", "ExampleGerman", "Notes", ...commonFields];
+const commonFields = ["ItemId", "ModuleId", "PackageId", "Origin", "SchemaVersion"];
+const languageFields = ["Target", "Source", "ExampleTarget", "ExampleSource", "Notes", ...commonFields];
 const css = `/* ${MANAGED_SENTINEL}; langtut-schema:${SCHEMA_HASH} */
 .card{font-family:system-ui;font-size:24px;text-align:left;color:#17201d;background:#f7f4ed;padding:24px}.target{font-size:1.35em;font-weight:700}.example{margin-top:18px;color:#41665a}.source{margin-top:24px;font-size:.55em;color:#777}`;
 
 export const modelDefinitions = [
   {
-    name: "SlovakTutorVocab", fields: languageFields, css,
+    name: "LangtutVocabV1", fields: languageFields, css,
     templates: bidirectionalTemplates("Vokabel"),
   },
   {
-    name: "SlovakTutorChunk", fields: languageFields, css,
+    name: "LangtutChunkV1", fields: languageFields, css,
     templates: bidirectionalTemplates("Chunk"),
   },
   {
-    name: "SlovakTutorRule", fields: ["Title", "Prompt", "Explanation", "Examples", "MilestoneId", ...commonFields], css,
+    name: "LangtutRuleV1", fields: ["Title", "Prompt", "Explanation", "Examples", "MilestoneId", ...commonFields], css,
     templates: [{ Name: "Regel", Front: `<div class="target">{{Title}}</div><div>{{Prompt}}</div>`, Back: `{{FrontSide}}<hr><div>{{Explanation}}</div><div class="example">{{Examples}}</div>` }],
   },
 ];
 
 function bidirectionalTemplates(label: string) {
   return [
-    { Name: `${label} SK-DE`, Front: `<div class="target">{{Slovak}}</div>{{#ExampleSlovak}}<div class="example">{{ExampleSlovak}}</div>{{/ExampleSlovak}}`, Back: `{{FrontSide}}<hr><div>{{German}}</div><div class="example">{{ExampleGerman}}</div>` },
-    { Name: `${label} DE-SK`, Front: `<div class="target">{{German}}</div>{{#ExampleGerman}}<div class="example">{{ExampleGerman}}</div>{{/ExampleGerman}}`, Back: `{{FrontSide}}<hr><div>{{Slovak}}</div><div class="example">{{ExampleSlovak}}</div>` },
+    { Name: `${label} Ziel–Quelle`, Front: `<div class="target">{{Target}}</div>{{#ExampleTarget}}<div class="example">{{ExampleTarget}}</div>{{/ExampleTarget}}`, Back: `{{FrontSide}}<hr><div>{{Source}}</div><div class="example">{{ExampleSource}}</div>` },
+    { Name: `${label} Quelle–Ziel`, Front: `<div class="target">{{Source}}</div>{{#ExampleSource}}<div class="example">{{ExampleSource}}</div>{{/ExampleSource}}`, Back: `{{FrontSide}}<hr><div>{{Target}}</div><div class="example">{{ExampleTarget}}</div>` },
   ];
 }
 
 function modelNameFor(kind: CandidateItem["kind"]): string {
-  return kind === "vocab" ? "SlovakTutorVocab" : kind === "chunk" ? "SlovakTutorChunk" : "SlovakTutorRule";
+  return kind === "vocab" ? "LangtutVocabV1" : kind === "chunk" ? "LangtutChunkV1" : "LangtutRuleV1";
 }
 
-function fieldsFor(item: CandidateItem): Record<string, string> {
-  const common = { ItemId: item.itemId, ModuleId: item.moduleId, Source: `langtut:${item.moduleId}`, SchemaVersion: "1" };
-  if (item.kind === "rule") return { Title: item.slovak, Prompt: item.german, Explanation: item.notes, Examples: `${item.exampleSlovak}<br>${item.exampleGerman}`, MilestoneId: item.milestoneId ?? "", ...common };
-  return { Slovak: item.slovak, German: item.german, ExampleSlovak: item.exampleSlovak, ExampleGerman: item.exampleGerman, Notes: item.notes, ...common };
+function fieldsFor(item: CandidateItem, packageId: string): Record<string, string> {
+  const common = { ItemId: item.itemId, ModuleId: item.moduleId, PackageId: packageId, Origin: `langtut:${packageId}:${item.moduleId}`, SchemaVersion: "1" };
+  if (item.kind === "rule") return { Title: item.target, Prompt: item.source, Explanation: item.notes, Examples: `${item.exampleTarget}<br>${item.exampleSource}`, MilestoneId: item.milestoneId ?? "", ...common };
+  return { Target: item.target, Source: item.source, ExampleTarget: item.exampleTarget, ExampleSource: item.exampleSource, Notes: item.notes, ...common };
 }
 
 export interface SetupPreview {

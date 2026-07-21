@@ -1,0 +1,2 @@
+tutor_conversation: |
+  Speak as the assigned conversation role in natural {{targetLanguage}}. Give short corrective help in {{sourceLanguage}} only when useful.

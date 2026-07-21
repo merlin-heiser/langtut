@@ -1,27 +1,44 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import YAML from "yaml";
+import multipart from "@fastify/multipart";
 import type { PlacementEvaluation, TutorReport, TutorTurn } from "@langtut/contracts";
-import { createSessionPlan, deriveModuleStatus, loadCurriculum, nextAvailableModule, recomputeLocks } from "@langtut/domain";
+import {
+  DEFAULT_PACKAGE_ID, LearningPackageRepository, applyProgress, createSessionPlan, deriveModuleStatus,
+  nextAvailableModule, recomputeLocks, renderPackagePrompt, type LearningActivity, type LoadedLearningPackage,
+  type PlacementItemDefinition,
+} from "@langtut/domain";
 import { AnkiClient, type AnkiGateway } from "./anki.js";
 import { loadConfig } from "./config.js";
 import { ContentPipeline } from "./content-pipeline.js";
 import { Store } from "./database.js";
-import { newPlacement, placementItems, recommendation, scoreAnswer } from "./placement.js";
+import { newPlacement, recommendation, scoreAnswer } from "./placement.js";
 import { ModelRouter, modelChoices, type ModelGateway } from "./providers.js";
 
-type PlacementState = ReturnType<typeof newPlacement> & { answers: Array<{ itemId: string; correct: boolean }>; recommendedModuleId?: string };
+type PlacementState = ReturnType<typeof newPlacement> & { packageId: string; answers: Array<{ itemId: string; correct: boolean }>; recommendedModuleId?: string };
+type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
 
 export async function buildApp(root = process.cwd(), overrides: { models?: ModelGateway; anki?: AnkiGateway } = {}) {
   const config = await loadConfig(root);
   const store = await Store.open(config.dbPath, root);
+  const packages = new LearningPackageRepository(root);
+  await packages.loadAll();
+  let activePackageId = store.getSetting<string>("packages.active") ?? DEFAULT_PACKAGE_ID;
+  if (!packages.get(activePackageId)) activePackageId = DEFAULT_PACKAGE_ID;
+  store.setSetting("packages.active", activePackageId);
   const models = overrides.models ?? await ModelRouter.load(root, config.modelTasksPath, (event) => store.recordApiUsage(event));
   const savedModelSelection = store.getSetting<{ openai: string; gemini: string }>("models.selection");
   if (savedModelSelection && models instanceof ModelRouter) models.setModelSelection(savedModelSelection);
   const anki = overrides.anki ?? new AnkiClient(config.anki.url, config.anki.deck, config.anki.key);
+
+  function active(): LoadedLearningPackage {
+    const pkg = packages.require(activePackageId);
+    anki.configurePackage?.(pkg.manifest.id, pkg.manifest.ankiDeck ?? `Langtut::${pkg.manifest.name}`);
+    return pkg;
+  }
+  active();
   const savedAnkiKey = store.getSetting<string>("anki.connect_api_key");
   if (savedAnkiKey && anki instanceof AnkiClient) {
     anki.configureKey(savedAnkiKey);
@@ -29,48 +46,68 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (!keyedStatus.reachable && /valid api key/i.test(keyedStatus.error ?? "")) {
       anki.configureKey(undefined);
       const keylessStatus = await anki.metrics();
-      if (keylessStatus.reachable) store.deleteSetting("anki.connect_api_key");
-      else anki.configureKey(savedAnkiKey);
+      if (keylessStatus.reachable) store.deleteSetting("anki.connect_api_key"); else anki.configureKey(savedAnkiKey);
     }
   }
-  const tagsDocument = YAML.parse(await readFile(path.join(root, "slowakisch_ai_tutor_recovery_bundle/tag_schema.yaml"), "utf8")) as { categories: Record<string, string[]> };
-  const allowedTags = new Set(Object.values(tagsDocument.categories).flat());
-  const pipeline = new ContentPipeline(store, anki, models, allowedTags, path.join(path.dirname(config.dbPath), "diagnostics/content-pipeline.jsonl"));
+
   const app = Fastify({ logger: true });
   await app.register(cors, { origin: true });
+  await app.register(multipart, { limits: { files: 1, fileSize: 50 * 1024 * 1024 } });
 
   async function refreshCurriculum() {
-    const base = await loadCurriculum(root, store.getProgress());
-    const progress = recomputeLocks(base, store.getProgress());
-    for (const module of base.modules) store.setStatus(module.id, progress[module.id]);
-    return loadCurriculum(root, progress);
+    const pkg = active();
+    const base = applyProgress(pkg.curriculum, store.getProgress(pkg.manifest.id));
+    const progress = recomputeLocks(base, store.getProgress(pkg.manifest.id));
+    for (const module of base.modules) store.setStatus(pkg.manifest.id, module.id, progress[module.id]);
+    return applyProgress(pkg.curriculum, progress);
   }
+  function pipeline() { return new ContentPipeline(store, anki, models, active(), path.join(path.dirname(config.dbPath), "diagnostics", `${activePackageId}.jsonl`)); }
+  function packageList() { return packages.list(activePackageId).map((pkg) => { const progress = store.getProgress(pkg.id); return { ...pkg, progress: { started: Object.values(progress).filter((status) => ["preparing", "learning", "credited"].includes(status)).length, completed: Object.values(progress).filter((status) => ["learning", "credited"].includes(status)).length, total: pkg.modules } }; }); }
 
   await refreshCurriculum();
   app.addHook("onClose", async () => store.close());
 
+  app.get("/api/v1/packages", async () => ({ activePackageId, packages: packageList() }));
+  app.get<{ Params: { id: string } }>("/api/v1/packages/:id", async (request, reply) => {
+    const pkg = packages.get(request.params.id);
+    if (!pkg) return reply.code(404).send({ error: "unknown_package" });
+    return { ...packageList().find(({ id }) => id === pkg.manifest.id), activities: pkg.activities };
+  });
+  app.post("/api/v1/packages/import", async (request, reply) => {
+    const upload = await request.file();
+    if (!upload) return reply.code(400).send({ error: "zip_file_required" });
+    const temp = path.join(path.dirname(config.dbPath), `.package-${randomUUID()}.zip`);
+    try {
+      await writeFile(temp, await upload.toBuffer());
+      const pkg = await packages.importZip(temp);
+      return reply.code(201).send({ ...pkg.manifest, modules: pkg.curriculum.modules.length, capabilities: pkg.capabilities });
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    } finally { await rm(temp, { force: true }); }
+  });
+  app.post<{ Params: { id: string } }>("/api/v1/packages/:id/activate", async (request, reply) => {
+    if (!packages.get(request.params.id)) return reply.code(404).send({ error: "unknown_package" });
+    if (request.params.id !== activePackageId && store.hasActiveWork(activePackageId)) return reply.code(409).send({ error: "active_package_has_running_work" });
+    activePackageId = request.params.id;
+    store.setSetting("packages.active", activePackageId);
+    active(); await refreshCurriculum();
+    return { activePackageId, package: packageList().find((pkg) => pkg.id === activePackageId) };
+  });
+
   app.get("/api/v1/status", async () => {
     const [curriculum, ankiStatus] = await Promise.all([refreshCurriculum(), anki.metrics()]);
-    return { database: { reachable: true }, curriculum: { version: curriculum.version, modules: curriculum.modules.length }, providers: models.status(), anki: ankiStatus };
+    return { packageId: activePackageId, database: { reachable: true }, curriculum: { version: curriculum.version, modules: curriculum.modules.length }, providers: models.status(), anki: ankiStatus };
   });
   app.get("/api/v1/costs/summary", async () => store.getApiCostSummary(new Date(), models.pricingVersion?.() ?? "untracked"));
-
   app.get("/api/v1/settings", async () => ({
     anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key) },
-    models: {
-      selection: models instanceof ModelRouter ? models.modelSelection() : undefined,
-      choices: modelChoices,
-    },
+    models: { selection: models instanceof ModelRouter ? models.modelSelection() : undefined, choices: modelChoices },
   }));
   app.post<{ Body: { openai?: string; gemini?: string } }>("/api/v1/settings/models", async (request, reply) => {
     if (!(models instanceof ModelRouter)) return reply.code(409).send({ error: "runtime_model_configuration_unavailable" });
     const current = models.modelSelection();
     const selection = { openai: request.body?.openai ?? current.openai, gemini: request.body?.gemini ?? current.gemini };
-    try {
-      models.setModelSelection(selection);
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
-    }
+    try { models.setModelSelection(selection); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
     store.setSetting("models.selection", selection);
     return { models: { selection, choices: modelChoices } };
   });
@@ -79,180 +116,157 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (!apiKey) return reply.code(400).send({ error: "anki_api_key_required" });
     if (!(anki instanceof AnkiClient)) return reply.code(409).send({ error: "runtime_anki_configuration_unavailable" });
     const previous = store.getSetting<string>("anki.connect_api_key") ?? config.anki.key;
-    anki.configureKey(apiKey);
-    const validation = await anki.metrics();
-    if (!validation.reachable) {
-      anki.configureKey(previous);
-      return reply.code(400).send({ error: `anki_api_key_rejected: ${validation.error ?? "AnkiConnect nicht erreichbar"}` });
-    }
-    store.setSetting("anki.connect_api_key", apiKey);
-    return { anki: { configured: true } };
+    anki.configureKey(apiKey); const validation = await anki.metrics();
+    if (!validation.reachable) { anki.configureKey(previous); return reply.code(400).send({ error: `anki_api_key_rejected: ${validation.error ?? "AnkiConnect nicht erreichbar"}` }); }
+    store.setSetting("anki.connect_api_key", apiKey); return { anki: { configured: true } };
   });
 
   app.get("/api/v1/curriculum", async () => refreshCurriculum());
   app.get("/api/v1/curriculum/next", async () => nextAvailableModule(await refreshCurriculum()));
-
+  app.get("/api/v1/activities", async () => ({ packageId: activePackageId, activities: active().activities }));
   app.post("/api/v1/session-plans", async (_request, reply) => {
     const curriculum = await refreshCurriculum();
-    const plan = createSessionPlan(await anki.metrics(), nextAvailableModule(curriculum), config.planner);
-    store.savePlan(plan);
-    return reply.code(201).send(plan);
+    const plan = createSessionPlan(await anki.metrics(), nextAvailableModule(curriculum), config.planner, activePackageId);
+    store.savePlan(plan); return reply.code(201).send(plan);
   });
-
   app.post<{ Params: { id: string } }>("/api/v1/modules/:id/prepare", async (request, reply) => {
     const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === request.params.id);
     if (!module) return reply.code(404).send({ error: "unknown_module" });
     if (module.status === "locked" || module.status === "credited") return reply.code(409).send({ error: `module_${module.status}` });
-    return reply.code(202).send(pipeline.start(module));
+    return reply.code(202).send(pipeline().start(module));
   });
-
   app.post<{ Params: { id: string; milestoneId: string } }>("/api/v1/modules/:id/milestones/:milestoneId/attempt", async (request, reply) => {
-    const curriculum = await refreshCurriculum();
-    const module = curriculum.modules.find((candidate) => candidate.id === request.params.id);
+    const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === request.params.id);
     if (!module) return reply.code(404).send({ error: "unknown_module" });
     if (!module.grammarMilestones.some((milestone) => milestone.id === request.params.milestoneId)) return reply.code(400).send({ error: "unknown_milestone" });
-    const evidence = store.getEvidence(module.id);
+    const evidence = store.getEvidence(activePackageId, module.id);
     evidence.attemptedMilestones = [...new Set([...evidence.attemptedMilestones, request.params.milestoneId])];
     const status = deriveModuleStatus(module.status, module, evidence);
-    store.saveEvidence(module.id, evidence, status);
-    return { moduleId: module.id, status, evidence };
+    store.saveEvidence(activePackageId, module.id, evidence, status);
+    return { packageId: activePackageId, moduleId: module.id, status, evidence };
   });
 
-  app.get("/api/v1/jobs/latest", async () => store.getLatestJob());
-  app.get<{ Params: { id: string } }>("/api/v1/jobs/:id", async (request, reply) => store.getJob(request.params.id) ?? reply.code(404).send({ error: "unknown_job" }));
-  app.get("/api/v1/quarantine", async () => store.listQuarantine());
+  app.get("/api/v1/jobs/latest", async () => store.getLatestJob(activePackageId));
+  app.get<{ Params: { id: string } }>("/api/v1/jobs/:id", async (request, reply) => {
+    const job = store.getJob(request.params.id); return job?.packageId === activePackageId ? job : reply.code(404).send({ error: "unknown_job" });
+  });
+  app.get("/api/v1/quarantine", async () => store.listQuarantine(activePackageId));
   app.get("/api/v1/export.jsonl", async (_request, reply) => reply.type("application/x-ndjson; charset=utf-8").send(store.exportJsonl()));
-
   app.get("/api/v1/integrations/anki/status", async () => anki.metrics());
-  app.post("/api/v1/integrations/anki/setup/preview", async (_request, reply) => {
-    try { return await anki.setupPreview(); } catch (error) { return reply.code(503).send({ error: error instanceof Error ? error.message : String(error) }); }
-  });
+  app.post("/api/v1/integrations/anki/setup/preview", async (_request, reply) => { try { return await anki.setupPreview(); } catch (error) { return reply.code(503).send({ error: error instanceof Error ? error.message : String(error) }); } });
   app.post<{ Body: { confirm?: boolean } }>("/api/v1/integrations/anki/setup/apply", async (request, reply) => {
     if (request.body?.confirm !== true) return reply.code(400).send({ error: "explicit_confirmation_required" });
     try { return await anki.applySetup(); } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
 
   app.post("/api/v1/placement-sessions", async (_request, reply) => {
-    const placement: PlacementState = { ...newPlacement(), answers: [] };
+    const items = active().placement;
+    const placement: PlacementState = { ...newPlacement(), packageId: activePackageId, answers: [] };
+    if (!items.length) { placement.status = "completed"; placement.recommendedModuleId = (await refreshCurriculum()).modules[0]?.id; await applyPlacementStart(placement.recommendedModuleId ?? ""); }
     store.savePlacement(placement);
-    return reply.code(201).send({ ...publicPlacement(placement), nextItem: publicPlacementItem(placementItems[0]) });
+    return reply.code(201).send({ ...publicPlacement(placement), ...(items[0] && placement.status === "active" ? { nextItem: publicPlacementItem(items[0]) } : {}) });
   });
-
   app.get("/api/v1/placement-sessions/latest", async () => {
-    const placement = store.getLatestPlacement<PlacementState>();
-    if (!placement) return null;
-    return publicPlacementWithNext(placement);
+    const placement = store.getLatestPlacement<PlacementState>(activePackageId);
+    return placement ? publicPlacementWithNext(placement, active().placement) : null;
   });
-
   app.post<{ Params: { id: string }; Body: { itemId: string; answer: string } }>("/api/v1/placement-sessions/:id/answers", async (request, reply) => {
-    const placement = store.getPlacement<PlacementState>(request.params.id);
+    const pkg = active(); const items = pkg.placement;
+    const placement = store.getPlacement<PlacementState>(activePackageId, request.params.id);
     if (!placement || placement.status !== "active") return reply.code(404).send({ error: "active_placement_not_found" });
-    const item = placementItems.find((candidate) => candidate.id === request.body?.itemId);
+    const item = items.find((candidate) => candidate.id === request.body?.itemId);
     if (!item || placement.answers.some((answer) => answer.itemId === item.id)) return reply.code(400).send({ error: "invalid_or_duplicate_item" });
-    let correct: boolean;
-    let rubric: PlacementEvaluation | undefined;
+    let correct: boolean; let rubric: PlacementEvaluation | undefined;
     if (item.kind === "open") {
-      rubric = await models.structured<PlacementEvaluation>("placement_open_response", `Bewerte diese freie slowakische Placement-Antwort auf Aufgabenerfüllung, Verständlichkeit und sprachliche Kontrolle. Niveauziel: ${item.level}. Verwende nur bekannte Tags. Aufgabe: ${item.prompt}\nAntwort: ${request.body.answer}`, "PlacementEvaluation");
-      correct = rubric.score >= 0.6;
-    } else correct = scoreAnswer(item, request.body.answer);
-    placement.answers.push({ itemId: item.id, correct });
-    placement.itemsAnswered = placement.answers.length;
-    placement.score = placement.answers.filter((answer) => answer.correct).length;
+      const prompt = `${renderPackagePrompt(pkg.prompts.placement_open_response, pkg)} Niveauziel: ${item.level}. Aufgabe: ${item.prompt}\nAntwort: ${request.body.answer}`;
+      rubric = await models.structured<PlacementEvaluation>("placement_open_response", prompt, "PlacementEvaluation"); correct = rubric.score >= 0.6;
+    } else correct = scoreAnswer(item, request.body.answer, pkg.manifest.targetLanguage.code);
+    placement.answers.push({ itemId: item.id, correct }); placement.itemsAnswered = placement.answers.length; placement.score = placement.answers.filter((answer) => answer.correct).length;
     if (!correct) placement.weakTags = [...new Set([...placement.weakTags, item.tag, ...(rubric?.weakTags ?? [])])];
     const stableHigh = placement.itemsAnswered >= 9 && placement.score / placement.itemsAnswered >= 0.78;
     const stableLow = placement.itemsAnswered >= 6 && placement.score / placement.itemsAnswered <= 0.34;
-    const elapsedMinutes = (Date.now() - Date.parse(placement.startedAt)) / 60_000;
-    const complete = stableHigh || stableLow || elapsedMinutes >= 15 || placement.itemsAnswered >= placementItems.length || placement.itemsAnswered >= placement.maxItems;
-    if (complete) {
-      placement.status = "completed";
-      placement.recommendedModuleId = recommendation(placement.score, placement.itemsAnswered);
-      await applyPlacementStart(placement.recommendedModuleId);
-    }
+    const complete = stableHigh || stableLow || (Date.now() - Date.parse(placement.startedAt)) / 60_000 >= 15 || placement.itemsAnswered >= items.length || placement.itemsAnswered >= placement.maxItems;
+    if (complete) { placement.status = "completed"; placement.recommendedModuleId = recommendation(placement.score, placement.itemsAnswered, (await refreshCurriculum()).modules); await applyPlacementStart(placement.recommendedModuleId); }
     store.savePlacement(placement);
-    const nextItem = complete ? undefined : publicPlacementItem(placementItems[placement.itemsAnswered]);
-    return { ...publicPlacement(placement), correct, rubric, nextItem };
+    return { ...publicPlacement(placement), correct, rubric, ...(!complete && items[placement.itemsAnswered] ? { nextItem: publicPlacementItem(items[placement.itemsAnswered]) } : {}) };
   });
-
   app.post<{ Params: { id: string }; Body: { moduleId: string } }>("/api/v1/placement-sessions/:id/override", async (request, reply) => {
-    const placement = store.getPlacement<PlacementState>(request.params.id);
-    const curriculum = await refreshCurriculum();
+    const placement = store.getPlacement<PlacementState>(activePackageId, request.params.id); const curriculum = await refreshCurriculum();
     const index = curriculum.modules.findIndex((module) => module.id === request.body?.moduleId);
     if (!placement || placement.status !== "completed" || index < 0) return reply.code(400).send({ error: "invalid_placement_or_module" });
-    curriculum.modules.forEach((module, moduleIndex) => store.setStatus(module.id, moduleIndex < index ? "credited" : moduleIndex === index ? "available" : "locked"));
-    placement.recommendedModuleId = request.body.moduleId;
-    store.savePlacement(placement);
+    await applyPlacementStart(request.body.moduleId); placement.recommendedModuleId = request.body.moduleId; store.savePlacement(placement);
     return { ...publicPlacement(placement), selectedModuleId: request.body.moduleId };
   });
 
-  app.post<{ Body: { planId?: string; moduleId?: string } }>("/api/v1/sessions", async (request, reply) => {
-    const id = randomUUID();
-    store.createSession(id, request.body?.planId ?? null, request.body?.moduleId ?? null);
-    return reply.code(201).send(store.getSession(id));
+  app.post<{ Body: { planId?: string; moduleId?: string; activityId?: string } }>("/api/v1/sessions", async (request, reply) => {
+    const pkg = active(); const activity = request.body?.activityId ? pkg.activities.find(({ id }) => id === request.body.activityId) : pkg.activities[0];
+    if (request.body?.activityId && !activity) return reply.code(400).send({ error: "unknown_activity" });
+    const module = (await refreshCurriculum()).modules.find(({ id }) => id === request.body?.moduleId);
+    if (activity && module?.activityIds?.length && !module.activityIds.includes(activity.id)) return reply.code(400).send({ error: "activity_not_available_for_module" });
+    const id = randomUUID(); store.createSession(activePackageId, id, request.body?.planId ?? null, request.body?.moduleId ?? null, activity?.id);
+    return reply.code(201).send({ ...store.getSession(id), activityId: activity?.id });
   });
-
+  app.post<{ Params: { id: string }; Body: { message: string } }>("/api/v1/sessions/:id/activity-turns", async (request, reply) => {
+    const session = store.getSession(request.params.id);
+    if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
+    try { return { turns: await executeActivityTurn(request.params.id, request.body?.message ?? "", session.moduleId as string | undefined) }; }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.post<{ Params: { id: string }; Body: { message: string } }>("/api/v1/sessions/:id/turns", async (request, reply) => {
     const session = store.getSession(request.params.id);
-    if (!session || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
-    const history = store.getSessionEvents(request.params.id);
-    const module = (await refreshCurriculum()).modules.find(({ id }) => id === session.moduleId);
-    const prompt = `Du bist ein geduldiger Slowakisch-Tutor. Antworte primär auf Slowakisch, erkläre knapp auf Deutsch. Korrigiere nur den wichtigsten Fehler.
-Aktives Modul: ${module?.title ?? "freie Wiederholung"}. Funktionen: ${module?.functions.join(", ") ?? "keine"}. Grammatikziele: ${module?.grammarMilestones.map(({ description }) => description).join(" | ") ?? "keine"}.
-Bisher: ${JSON.stringify(history)}\nLernereingabe: ${request.body?.message ?? ""}`;
-    const rawTurn = await models.structured<TutorTurn>("tutor_conversation", `${prompt}
-Behandle Meta-Kommentare über deine vorherige Aufgabe als Gesprächsbeitrag. Interpretiere zitierten Text nicht automatisch als Übersetzungsauftrag; frage bei echter Mehrdeutigkeit kurz nach.
-Gib keine Markdown-Syntax aus. message enthält nur die slowakische Tutorreaktion, explanation nur die deutsche Erklärung.`, "TutorTurn");
-    const turn = normalizeTutorTurn(rawTurn);
-    store.appendSessionEvent(request.params.id, "learner_turn", { message: request.body.message });
-    store.appendSessionEvent(request.params.id, "tutor_turn", turn);
-    return turn;
+    if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
+    let turns: ActivityTurn[]; try { turns = await executeActivityTurn(request.params.id, request.body?.message ?? "", session.moduleId as string | undefined); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+    return turns[0]?.turn ?? { message: "", correction: "", explanation: "", newExample: "" };
   });
-
   app.post<{ Params: { id: string } }>("/api/v1/sessions/:id/complete", async (request, reply) => {
     const session = store.getSession(request.params.id);
-    if (!session || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
-    const events = store.getSessionEvents(request.params.id);
-    const report = await models.structured<TutorReport>("session_report", `Erstelle einen strukturierten, evidenzbasierten Bericht. Erfinde keine Fehler. Erlaubte Tags: ${[...allowedTags].join(", ")}.\n${JSON.stringify(events)}`, "TutorReport");
-    store.completeSession(request.params.id, report);
-    return report;
+    if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
+    const pkg = active(); const events = store.getSessionEvents(request.params.id);
+    const report = await models.structured<TutorReport>("session_report", `${renderPackagePrompt(pkg.prompts.session_report, pkg)} Erfinde keine Fehler. Erlaubte Tags: ${[...pkg.allowedTags].join(", ")}.\n${JSON.stringify(events)}`, "TutorReport");
+    store.completeSession(request.params.id, report); return report;
   });
 
   app.get("/health", async () => ({ ok: true }));
 
-  async function applyPlacementStart(moduleId: string) {
-    const curriculum = await refreshCurriculum();
-    const index = curriculum.modules.findIndex((module) => module.id === moduleId);
-    if (index < 0) return;
-    curriculum.modules.forEach((module, moduleIndex) => store.setStatus(module.id, moduleIndex < index ? "credited" : moduleIndex === index ? "available" : "locked"));
+  async function executeActivityTurn(sessionId: string, message: string, moduleId?: string): Promise<ActivityTurn[]> {
+    const pkg = active(); const history = store.getSessionEvents(sessionId); const start = history.find(({ eventType }) => eventType === "session_started")?.payload as { activityId?: string } | undefined;
+    const activity = pkg.activities.find(({ id }) => id === start?.activityId) ?? pkg.activities[0] ?? fallbackActivity();
+    if (history.filter(({ eventType }) => eventType === "learner_turn").length >= activity.rounds) throw new Error("activity_round_limit_reached");
+    const module = (await refreshCurriculum()).modules.find(({ id }) => id === moduleId);
+    store.appendSessionEvent(sessionId, "learner_turn", { roleId: activity.roles.find(({ controller }) => controller === "learner")?.id ?? "learner", message });
+    const results: ActivityTurn[] = [];
+    for (const roleId of rolesAfterLearner(activity)) {
+      const role = activity.roles.find(({ id }) => id === roleId)!;
+      if (role.controller === "fixed") {
+        const turn = { message: role.message ?? "", correction: "", explanation: "", newExample: "" }; results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn }); continue;
+      }
+      if (role.controller !== "llm") continue;
+      const roleTemplate = pkg.prompts[role.prompt ?? "tutor_conversation"] ?? pkg.prompts.tutor_conversation;
+      const prompt = `${renderPackagePrompt(roleTemplate, pkg)}\nRolle: ${role.label}. Aktivität: ${activity.title}.\nAktives Modul: ${module?.title ?? "freie Wiederholung"}. Funktionen: ${module?.functions.join(", ") ?? "keine"}. Lernziele: ${module?.grammarMilestones.map(({ description }) => description).join(" | ") ?? "keine"}.\nBisher: ${JSON.stringify(history)}\nLernereingabe: ${message}\nGib keine Markdown-Syntax aus. message enthält nur die Reaktion in ${pkg.manifest.targetLanguage.name}, explanation nur die Erklärung in ${pkg.manifest.sourceLanguage.name}.`;
+      const turn = normalizeTutorTurn(await models.structured<TutorTurn>("tutor_conversation", prompt, "TutorTurn"), pkg.manifest.sourceLanguage.name);
+      results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn });
+    }
+    return results;
   }
-
+  async function applyPlacementStart(moduleId: string) {
+    const curriculum = await refreshCurriculum(); const index = curriculum.modules.findIndex((module) => module.id === moduleId); if (index < 0) return;
+    curriculum.modules.forEach((module, moduleIndex) => store.setStatus(activePackageId, module.id, moduleIndex < index ? "credited" : moduleIndex === index ? "available" : "locked"));
+  }
   return app;
 }
 
-function publicPlacement(placement: PlacementState) {
-  return { id: placement.id, status: placement.status, startedAt: placement.startedAt, itemsAnswered: placement.itemsAnswered, maxItems: placement.maxItems, recommendedModuleId: placement.recommendedModuleId, weakTags: placement.weakTags };
-}
+function fallbackActivity(): LearningActivity { return { id: "conversation", title: "Konversation", roles: [{ id: "learner", label: "Lernender", controller: "learner" }, { id: "tutor", label: "Tutor", controller: "llm", prompt: "tutor_conversation" }], turnOrder: ["learner", "tutor"], rounds: 8 }; }
+export function rolesAfterLearner(activity: LearningActivity): string[] { const learnerIndex = activity.turnOrder.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); const rotated = [...activity.turnOrder.slice(learnerIndex + 1), ...activity.turnOrder.slice(0, learnerIndex)]; const nextLearner = rotated.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); return nextLearner < 0 ? rotated : rotated.slice(0, nextLearner); }
+function publicPlacement(placement: PlacementState) { return { id: placement.id, packageId: placement.packageId, status: placement.status, startedAt: placement.startedAt, itemsAnswered: placement.itemsAnswered, maxItems: placement.maxItems, recommendedModuleId: placement.recommendedModuleId, weakTags: placement.weakTags }; }
+function publicPlacementItem(item: PlacementItemDefinition) { return { id: item.id, level: item.level, prompt: item.prompt, kind: item.kind ?? "production", choices: item.choices }; }
+function publicPlacementWithNext(placement: PlacementState, items: PlacementItemDefinition[]) { return { ...publicPlacement(placement), ...(placement.status === "active" && items[placement.itemsAnswered] ? { nextItem: publicPlacementItem(items[placement.itemsAnswered]) } : {}) }; }
 
-function publicPlacementItem(item: (typeof placementItems)[number]) {
-  return { id: item.id, level: item.level, prompt: item.prompt, kind: item.kind ?? "production", choices: item.choices };
-}
-
-function publicPlacementWithNext(placement: PlacementState) {
-  return {
-    ...publicPlacement(placement),
-    ...(placement.status === "active" && placementItems[placement.itemsAnswered]
-      ? { nextItem: publicPlacementItem(placementItems[placement.itemsAnswered]) }
-      : {}),
-  };
-}
-
-export function normalizeTutorTurn(turn: TutorTurn): TutorTurn {
+export function normalizeTutorTurn(turn: TutorTurn, sourceLanguageName = "Deutsch"): TutorTurn {
   const plain = (value: string) => value.replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
-  let message = plain(turn.message);
-  let explanation = plain(turn.explanation);
-  const german = message.match(/\s*Deutsch:\s*(.+)$/i);
-  if (german?.index !== undefined) {
-    message = message.slice(0, german.index).trim();
-    explanation = [plain(german[1]), explanation].filter(Boolean).join(" ");
-  }
+  let message = plain(turn.message); let explanation = plain(turn.explanation);
+  const translated = message.match(new RegExp(`\\s*${escapeRegExp(sourceLanguageName)}:\\s*(.+)$`, "i"));
+  if (translated?.index !== undefined) { message = message.slice(0, translated.index).trim(); explanation = [plain(translated[1]), explanation].filter(Boolean).join(" "); }
   return { message, correction: plain(turn.correction), explanation, newExample: plain(turn.newExample) };
 }
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }

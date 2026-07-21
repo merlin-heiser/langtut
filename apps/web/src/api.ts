@@ -1,7 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...(!(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...init?.headers } });
   const raw = await response.text();
   let body: Record<string, unknown> | undefined;
   if (raw.trim()) {
@@ -13,3 +13,4 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const post = <T>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
+export const uploadPackage = <T>(file: File) => { const body = new FormData(); body.append("file", file); return api<T>("/packages/import", { method: "POST", body }); };

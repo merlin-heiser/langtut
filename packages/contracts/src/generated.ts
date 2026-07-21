@@ -30,8 +30,8 @@ export interface GrammarMilestone {
 }
 export interface CurriculumModule {
   id: string;
-  cefr: "A0" | "A1" | "A2" | "B1";
-  displayLevel: "Pre-A1" | "A1" | "A2" | "B1";
+  cefr: string;
+  displayLevel: string;
   title: string;
   vocabTarget: number;
   vocabDomains: string[];
@@ -45,17 +45,19 @@ export interface CurriculumModule {
    * @maxItems 3
    */
   focusTags: string[];
+  activityIds?: string[];
   status: ModuleStatus;
 }
 export interface Curriculum {
+  packageId: string;
   version: string;
-  language: "sk";
-  targetLevel: "B1";
-  vocabTarget: 2000;
+  language: string;
+  sourceLanguage: string;
+  targetLevel: string;
+  vocabTarget: number;
   exerciseTypes: string[];
   /**
-   * @minItems 23
-   * @maxItems 23
+   * @minItems 1
    */
   modules: CurriculumModule[];
 }
@@ -82,6 +84,7 @@ export interface ApiCostSummary {
 }
 export interface SessionPlan {
   id: string;
+  packageId: string;
   createdAt: string;
   mode: SessionMode;
   timeBudgetMin: number;
@@ -96,10 +99,10 @@ export interface CandidateItem {
   itemId: string;
   kind: "vocab" | "chunk" | "rule";
   moduleId: string;
-  slovak: string;
-  german: string;
-  exampleSlovak: string;
-  exampleGerman: string;
+  target: string;
+  source: string;
+  exampleTarget: string;
+  exampleSource: string;
   notes: string;
   /**
    * @maxItems 3
@@ -133,6 +136,7 @@ export interface TutorReport {
 }
 export interface Job {
   id: string;
+  packageId: string;
   kind: string;
   moduleId?: string;
   status: "queued" | "running" | "completed" | "failed";
@@ -144,6 +148,7 @@ export interface Job {
 }
 export interface PlacementSession {
   id: string;
+  packageId: string;
   status: "active" | "completed";
   startedAt: string;
   itemsAnswered: number;

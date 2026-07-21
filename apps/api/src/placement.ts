@@ -1,14 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { CurriculumModule, ModuleStatus } from "@langtut/contracts";
+import type { PlacementItemDefinition } from "@langtut/domain";
 
-export interface PlacementItem {
-  id: string;
-  level: "Pre-A1" | "A1" | "A2" | "B1";
-  prompt: string;
-  expected: string[];
-  tag: string;
-  kind?: "production" | "recognition" | "open";
-  choices?: string[];
-}
+export type PlacementItem = PlacementItemDefinition;
 
 export const placementItems: PlacementItem[] = [
   { id: "p1", level: "Pre-A1", prompt: "Welche Form bedeutet ‚Guten Tag‘?", expected: ["dobrý deň"], tag: "func_greet", kind: "recognition", choices: ["Dobrý deň", "Dovidenia", "Ďakujem"] },
@@ -39,15 +33,17 @@ export function newPlacement(): PlacementStateBase {
   return { id: randomUUID(), status: "active", startedAt: new Date().toISOString(), itemsAnswered: 0, maxItems: 20, score: 0, weakTags: [] };
 }
 
-export function scoreAnswer(item: PlacementItem, answer: string): boolean {
-  const normalized = answer.normalize("NFC").toLocaleLowerCase("sk").replace(/[.!?]/g, "").trim();
+export function scoreAnswer(item: PlacementItem, answer: string, locale?: string): boolean {
+  const normalized = answer.normalize("NFC").toLocaleLowerCase(locale).replace(/[.!?]/g, "").trim();
   return item.expected.some((expected) => normalized.includes(expected));
 }
 
-export function recommendation(score: number, answered: number): string {
+export function recommendation(score: number, answered: number, modules: CurriculumModule[]): string {
   const ratio = answered ? score / answered : 0;
-  if (answered >= 9 && ratio >= 0.75) return "b1_case_mastery_round1";
-  if (answered >= 6 && ratio >= 0.65) return "a2_travel_transport";
-  if (answered >= 3 && ratio >= 0.55) return "a1_introductions_identity";
-  return "a0_alphabet_pronunciation";
+  const position = ratio >= 0.75 ? 0.7 : ratio >= 0.65 ? 0.45 : ratio >= 0.55 ? 0.2 : 0;
+  return modules[Math.min(modules.length - 1, Math.floor(modules.length * position))]?.id ?? modules[0]?.id ?? "";
+}
+
+export function initialProgress(modules: CurriculumModule[], selectedIndex = 0): Record<string, ModuleStatus> {
+  return Object.fromEntries(modules.map((module, index) => [module.id, index < selectedIndex ? "credited" : index === selectedIndex ? "available" : "locked"]));
 }

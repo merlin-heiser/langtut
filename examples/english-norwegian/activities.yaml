@@ -1,0 +1,12 @@
+activities:
+  - id: three-person-cafe
+    title: Three-person café conversation
+    description: The learner talks with a host and another guest.
+    roles:
+      - { id: learner, label: Learner, controller: learner }
+      - { id: host, label: Host, controller: llm, prompt: tutor_conversation }
+      - { id: guest, label: Guest, controller: llm, prompt: tutor_conversation }
+    turnOrder: [learner, host, guest]
+    rounds: 6
+    focusTags: [greetings]
+

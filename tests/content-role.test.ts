@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CandidateItem } from "@langtut/contracts";
 import { validateLearningRole } from "@langtut/domain";
-import { loadCurriculum } from "@langtut/domain";
+import { DEFAULT_PACKAGE_ID, loadCurriculum, loadLearningPackage } from "@langtut/domain";
 import { buildGenerationPrompt } from "../apps/api/src/content-pipeline.js";
 
 function vocab(slovak: string, german: string, notes = "Alltagswort."): CandidateItem {
@@ -9,10 +9,10 @@ function vocab(slovak: string, german: string, notes = "Alltagswort."): Candidat
     itemId: `test:${slovak}`,
     kind: "vocab",
     moduleId: "test",
-    slovak,
-    german,
-    exampleSlovak: `Používam slovo ${slovak}.`,
-    exampleGerman: `Ich verwende das Wort ${german}.`,
+    target: slovak,
+    source: german,
+    exampleTarget: `Používam slovo ${slovak}.`,
+    exampleSource: `Ich verwende das Wort ${german}.`,
     notes,
     tags: [],
   };
@@ -58,18 +58,19 @@ describe("learning-role separation", () => {
 
   it("keeps grammar metadata out of vocabulary prompts for all 23 modules", async () => {
     const curriculum = await loadCurriculum(process.cwd());
+    const pkg = await loadLearningPackage(`${process.cwd()}/learning-packages/${DEFAULT_PACKAGE_ID}`, process.cwd());
     expect(curriculum.modules).toHaveLength(23);
     for (const module of curriculum.modules) {
-      const vocabPrompt = buildGenerationPrompt(module, "vocab", 20, []);
+      const vocabPrompt = buildGenerationPrompt(pkg, module, "vocab", 20, []);
       expect(vocabPrompt).toContain(module.vocabDomains.join(", "));
       expect(vocabPrompt).not.toContain(module.title);
       for (const milestone of module.grammarMilestones) expect(vocabPrompt).not.toContain(milestone.description);
 
-      const chunkPrompt = buildGenerationPrompt(module, "chunk", 1, []);
+      const chunkPrompt = buildGenerationPrompt(pkg, module, "chunk", 1, []);
       expect(chunkPrompt).toContain(module.functions.join(", "));
       for (const milestone of module.grammarMilestones) expect(chunkPrompt).not.toContain(milestone.description);
 
-      const rulePrompt = buildGenerationPrompt(module, "rule", module.grammarMilestones.length, []);
+      const rulePrompt = buildGenerationPrompt(pkg, module, "rule", module.grammarMilestones.length, []);
       for (const milestone of module.grammarMilestones) expect(rulePrompt).toContain(milestone.description);
     }
   });

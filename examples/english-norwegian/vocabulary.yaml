@@ -1,0 +1,11 @@
+items:
+  - itemId: introductions:vocab:hello
+    kind: vocab
+    moduleId: introductions
+    target: hello
+    source: hei
+    exampleTarget: Hello, I am Ada.
+    exampleSource: Hei, jeg er Ada.
+    notes: A common greeting.
+    tags: [greetings]
+

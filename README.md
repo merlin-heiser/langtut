@@ -1,13 +1,14 @@
-# Slowakisch AI Tutor
+# Langtut
 
-Spec-driven lokaler Slowakisch-Tutor, rekonstruiert aus dem unveränderten Recovery-Bundle. Anki verantwortet Karten und Spaced Repetition; Langtut verantwortet Curriculum, Placement, Progression, Tutor-Sessions und Inhaltsqualität.
+Langtut ist ein lokaler Lernpaket-Player: Der Player besitzt Progression, Sessions, Qualitätsgates und die Anschlüsse an LLMs und Anki. Austauschbare Lernpakete liefern Sprachen, Curriculum, Lernziele und optional Placement, geprüfte Startvokabeln, Prompt-Anpassungen und deklarative Lernmethoden.
+
+Slowakisch–Deutsch ist als Standardpaket enthalten. Weitere Pakete können in der Oberfläche als ZIP installiert oder als Verzeichnis unter `data/packages/<paket-id>` abgelegt werden. Immer genau ein Paket ist aktiv; der Fortschritt bleibt je Paket erhalten.
 
 ## Start
 
-Voraussetzungen: Node.js 24+, npm, GNU Make, PowerShell 7 (`pwsh`) und Anki Desktop mit AnkiConnect. API-Schlüssel bleiben ausschließlich in der lokalen API-Umgebung.
+Voraussetzungen: Node.js 24+, npm, PowerShell 7 und Anki Desktop mit AnkiConnect. API-Schlüssel bleiben ausschließlich in der lokalen API-Umgebung.
 
 ```powershell
-Copy-Item config/.env.example .env
 npm install
 npm run check
 make webapp
@@ -15,29 +16,34 @@ make webapp
 
 Web-App: `http://localhost:5173`, API: `http://127.0.0.1:3210`.
 
-`make webapp` ersetzt eine vorhandene Langtut-Dev-Instanz nur dann sanft, wenn keine
-aktiven Placements, Tutor-Sessions oder Generierungsjobs vorliegen. Andernfalls nennt
-die CLI die Schutzgründe und lässt die laufende Instanz unverändert. `make force webapp`
-führt bewusst einen harten Neustart durch. Beide Befehle sorgen dafür, dass nie zwei
-Langtut-Instanzen parallel weiterlaufen.
+## Minimales Lernpaket
 
-Alternativ lässt sich der Entwicklungsserver über den Make-Shortcut starten:
+Ein Paket besteht mindestens aus `package.yaml` und `curriculum.yaml`. Die Dateien `vocabulary.yaml`, `placement.yaml`, `prompts.yaml` und `activities.yaml` sind optional. Ein vollständiges kleines Beispiel liegt unter `examples/english-norwegian`.
+
+```yaml
+# package.yaml
+schemaVersion: 1
+id: english-norwegian-demo
+version: 1.0.0
+name: English – Norwegian
+targetLanguage: { code: en, name: English }
+sourceLanguage: { code: nb, name: Norsk bokmål }
+targetLevel: A1
+```
+
+Pakete enthalten keinen ausführbaren Code. `activities.yaml` kombiniert sichere Player-Bausteine zu eigenen Methoden: beliebig viele Rollen können vom Lernenden, vom LLM oder durch festen Text gesteuert und in einer Turn-Reihenfolge angeordnet werden. Das Beispiel definiert eine Dreierkonversation.
 
 ```powershell
-make webapp
+npm run package:validate -- examples/english-norwegian
 ```
+
+Mitgelieferte Vokabeln werden zuerst importiert; das LLM ergänzt nur bis zum Ziel des Moduls. Prompts überschreiben einzelne bekannte Aufgaben, alle übrigen kommen aus der Standardbibliothek.
 
 ## Verbindliche Quellen
 
 - Produktregeln: `specs/product.md`
-- Features und Akzeptanz: `specs/features/` und `specs/acceptance/`
 - HTTP-Vertrag: `specs/api/openapi.yaml`
 - Datenverträge: `specs/schemas/contracts.schema.json`
-- Curriculum-Quelle: `slowakisch_ai_tutor_recovery_bundle/roadmap_a0_b1.yaml`
-- Modernisierte Fokus-Tags: `curriculum/module_focus_tags.yaml`
+- Standardpaket-Metadaten: `learning-packages/slowakisch-deutsch/package.yaml`
 
-`packages/contracts/src/generated.ts` wird aus dem JSON Schema erzeugt und nie manuell gepflegt. Das Recovery-Bundle bleibt archiviert und unverändert.
-
-## Sichere Integrationen
-
-Provideraufrufe erfolgen task-spezifisch gemäß `config/model_tasks.yaml`, ohne stillen Fallback. Modulvorbereitung autorisiert den jeweiligen Generierungsbatch und die Anki-Schreibvorgänge. Dabei richtet die Pipeline fehlende app-eigene Anki-Modelle automatisch ein; der Diff bleibt vorab in der Oberfläche einsehbar und gleichnamige fremde Modelle werden niemals verändert.
+Anki besitzt Karten und Spaced Repetition. Langtut verändert keine fremden Notiztypen und markiert eigene Karten mit Paket-, Modul- und Inhalts-Tags.

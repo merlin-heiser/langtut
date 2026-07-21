@@ -23,8 +23,8 @@
       "required": ["id", "cefr", "displayLevel", "title", "vocabTarget", "vocabDomains", "functions", "grammarMilestones", "practiceTypes", "prerequisites", "exitCriteria", "focusTags", "status"],
       "properties": {
         "id": { "type": "string" },
-        "cefr": { "type": "string", "enum": ["A0", "A1", "A2", "B1"] },
-        "displayLevel": { "type": "string", "enum": ["Pre-A1", "A1", "A2", "B1"] },
+        "cefr": { "type": "string", "minLength": 1 },
+        "displayLevel": { "type": "string", "minLength": 1 },
         "title": { "type": "string" },
         "vocabTarget": { "type": "integer", "minimum": 1 },
         "vocabDomains": { "type": "array", "items": { "type": "string" } },
@@ -34,20 +34,23 @@
         "prerequisites": { "type": "array", "items": { "type": "string" } },
         "exitCriteria": { "type": "array", "items": { "type": "string" } },
         "focusTags": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "type": "string" } },
+        "activityIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
         "status": { "$ref": "#/definitions/ModuleStatus" }
       }
     },
     "Curriculum": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "language", "targetLevel", "vocabTarget", "exerciseTypes", "modules"],
+      "required": ["packageId", "version", "language", "sourceLanguage", "targetLevel", "vocabTarget", "exerciseTypes", "modules"],
       "properties": {
+        "packageId": { "type": "string", "minLength": 1 },
         "version": { "type": "string" },
-        "language": { "const": "sk" },
-        "targetLevel": { "const": "B1" },
-        "vocabTarget": { "const": 2000 },
+        "language": { "type": "string", "minLength": 2 },
+        "sourceLanguage": { "type": "string", "minLength": 2 },
+        "targetLevel": { "type": "string", "minLength": 1 },
+        "vocabTarget": { "type": "integer", "minimum": 1 },
         "exerciseTypes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
-        "modules": { "type": "array", "minItems": 23, "maxItems": 23, "items": { "$ref": "#/definitions/CurriculumModule" } }
+        "modules": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/CurriculumModule" } }
       }
     },
     "AnkiMetrics": {
@@ -85,9 +88,10 @@
     "SessionPlan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "createdAt", "mode", "timeBudgetMin", "reviewCapacity", "newCardBudget", "primaryModuleId", "focusTags", "reasons", "anki"],
+      "required": ["id", "packageId", "createdAt", "mode", "timeBudgetMin", "reviewCapacity", "newCardBudget", "primaryModuleId", "focusTags", "reasons", "anki"],
       "properties": {
         "id": { "type": "string" },
+        "packageId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "mode": { "$ref": "#/definitions/SessionMode" },
         "timeBudgetMin": { "type": "integer" },
@@ -102,15 +106,15 @@
     "CandidateItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["itemId", "kind", "moduleId", "slovak", "german", "exampleSlovak", "exampleGerman", "notes", "tags"],
+      "required": ["itemId", "kind", "moduleId", "target", "source", "exampleTarget", "exampleSource", "notes", "tags"],
       "properties": {
         "itemId": { "type": "string", "minLength": 1 },
         "kind": { "type": "string", "enum": ["vocab", "chunk", "rule"] },
         "moduleId": { "type": "string" },
-        "slovak": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "german": { "type": "string", "minLength": 1, "maxLength": 260 },
-        "exampleSlovak": { "type": "string", "maxLength": 400 },
-        "exampleGerman": { "type": "string", "maxLength": 400 },
+        "target": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 260 },
+        "exampleTarget": { "type": "string", "maxLength": 400 },
+        "exampleSource": { "type": "string", "maxLength": 400 },
         "notes": { "type": "string", "maxLength": 500 },
         "tags": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "type": "string" } },
         "milestoneId": { "type": "string" },
@@ -169,9 +173,10 @@
     "Job": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "status", "progress", "createdAt", "updatedAt"],
+      "required": ["id", "packageId", "kind", "status", "progress", "createdAt", "updatedAt"],
       "properties": {
         "id": { "type": "string" },
+        "packageId": { "type": "string" },
         "kind": { "type": "string" },
         "moduleId": { "type": "string" },
         "status": { "type": "string", "enum": ["queued", "running", "completed", "failed"] },
@@ -185,9 +190,10 @@
     "PlacementSession": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "status", "startedAt", "itemsAnswered", "maxItems"],
+      "required": ["id", "packageId", "status", "startedAt", "itemsAnswered", "maxItems"],
       "properties": {
         "id": { "type": "string" },
+        "packageId": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "completed"] },
         "startedAt": { "type": "string", "format": "date-time" },
         "itemsAnswered": { "type": "integer", "minimum": 0 },

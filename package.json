@@ -12,6 +12,7 @@
     "build": "npm run generate && npm run build --workspaces --if-present",
     "generate": "node scripts/generate-contracts.mjs",
     "spec:lint": "node scripts/validate-specs.mjs",
+    "package:validate": "node scripts/validate-package.mjs",
     "pretest": "node scripts/link-local-workspaces.mjs",
     "test": "npm run generate && vitest run",
     "test:watch": "vitest",

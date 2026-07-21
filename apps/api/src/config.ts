@@ -25,7 +25,7 @@ export async function loadConfig(root = process.cwd()): Promise<AppConfig> {
     dbPath: path.resolve(root, process.env.LANGTUT_DB_PATH ?? "data/langtut.db"),
     anki: {
       url: process.env.ANKI_CONNECT_URL ?? raw.anki?.url ?? "http://localhost:8765",
-      deck: process.env.ANKI_DECK ?? raw.anki?.deck ?? "Slovak Tutor",
+      deck: process.env.ANKI_DECK ?? raw.anki?.deck ?? "Langtut",
       key: process.env.ANKI_CONNECT_KEY,
     },
     planner: {

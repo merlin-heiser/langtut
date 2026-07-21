@@ -1,0 +1,15 @@
+activities:
+  - id: guided-conversation
+    title: Geführte Konversation
+    description: Lernender und Tutor führen ein zielgebundenes Gespräch.
+    roles:
+      - id: learner
+        label: Lernender
+        controller: learner
+      - id: tutor
+        label: Tutor
+        controller: llm
+        prompt: tutor_conversation
+    turnOrder: [learner, tutor]
+    rounds: 8
+

@@ -37,9 +37,9 @@ class FakeModels implements ModelGateway {
         const sequence = kind === "vocab" ? this.vocab++ : index;
         return {
           itemId: `${this.module.id}:${kind}:${sequence}`, kind, moduleId: this.module.id,
-          slovak: kind === "vocab" ? `slovo ${sequence}` : kind === "chunk" ? `fráza ${this.module.functions[index]}` : `pravidlo ${this.module.grammarMilestones[index].id}`,
-          german: kind === "vocab" ? `Wort ${sequence}` : kind === "chunk" ? `Wendung ${this.module.functions[index]}` : `Regel ${this.module.grammarMilestones[index].id}`,
-          exampleSlovak: `Toto je príklad ${sequence}.`, exampleGerman: `Das ist Beispiel ${sequence}.`, notes: "Eine Lernidee.", tags: [...this.module.focusTags],
+          target: kind === "vocab" ? `slovo ${sequence}` : kind === "chunk" ? `fráza ${this.module.functions[index]}` : `pravidlo ${this.module.grammarMilestones[index].id}`,
+          source: kind === "vocab" ? `Wort ${sequence}` : kind === "chunk" ? `Wendung ${this.module.functions[index]}` : `Regel ${this.module.grammarMilestones[index].id}`,
+          exampleTarget: `Toto je príklad ${sequence}.`, exampleSource: `Das ist Beispiel ${sequence}.`, notes: "Eine Lernidee.", tags: [...this.module.focusTags],
           ...(kind === "chunk" ? { functionId: this.module.functions[index] } : {}),
           ...(kind === "rule" ? { milestoneId: this.module.grammarMilestones[index].id } : {}),
         };
@@ -81,7 +81,7 @@ describe("vertical release path with fake integrations", () => {
     expect(models.vocabularyPrompts[0]).not.toContain(module.grammarMilestones[0].description);
     expect(models.vocabularyPrompts[0]).toContain("keine einzelnen Buchstaben oder Zeichen");
     expect(models.vocabularyPrompts[1]).toContain('"slovo 0"');
-    const diagnostics = (await readFile(path.join(temporary, "diagnostics/content-pipeline.jsonl"), "utf8"))
+    const diagnostics = (await readFile(path.join(temporary, "diagnostics/slowakisch-deutsch.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(diagnostics.filter(({ event }) => event === "batch_finished")).toHaveLength(Math.ceil(module.vocabTarget / 20));
     expect(diagnostics.some(({ event, importedTotal }) => event === "batch_finished" && importedTotal === module.vocabTarget)).toBe(true);
@@ -102,11 +102,11 @@ describe("vertical release path with fake integrations", () => {
     const module = (await loadCurriculum(process.cwd())).modules[0];
     const wrong: CandidateItem = {
       itemId: "legacy:case", kind: "vocab", moduleId: module.id,
-      slovak: "akuzatív", german: "Akkusativ", exampleSlovak: "Toto je akuzatív.", exampleGerman: "Das ist der Akkusativ.",
+      target: "akuzatív", source: "Akkusativ", exampleTarget: "Toto je akuzatív.", exampleSource: "Das ist der Akkusativ.",
       notes: "Grammatikbezeichnung.", tags: [...module.focusTags],
     };
     const seed = await Store.open(dbPath, process.cwd());
-    seed.saveGenerated({ itemId: wrong.itemId, moduleId: wrong.moduleId, kind: wrong.kind, normalized: wrong.slovak, payload: wrong }, "imported", 777);
+    seed.saveGenerated("slowakisch-deutsch", { itemId: wrong.itemId, moduleId: wrong.moduleId, kind: wrong.kind, normalized: wrong.target, payload: wrong }, "imported", 777);
     seed.close();
 
     const anki = new FakeAnkiGateway();

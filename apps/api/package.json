@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@fastify/cors": "latest",
+    "@fastify/multipart": "latest",
     "@google/genai": "latest",
     "@langtut/contracts": "0.1.0",
     "@langtut/domain": "0.1.0",
