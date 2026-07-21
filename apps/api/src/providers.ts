@@ -40,6 +40,11 @@ export interface ModelGateway {
   pricingVersion?(): string;
 }
 
+export const modelChoices = {
+  openai: ["gpt-5.6-terra", "gpt-5.6-luna", "gpt-4o-mini"],
+  gemini: ["gemini-3.5-flash", "gemini-3.1-flash-lite"],
+} as const;
+
 export class ModelRouter implements ModelGateway {
   private constructor(
     private readonly tasks: Record<string, ModelTask>,
@@ -90,6 +95,21 @@ export class ModelRouter implements ModelGateway {
 
   pricingVersion(): string { return this.pricingCatalogVersion; }
 
+  modelSelection(): { openai: string; gemini: string } {
+    return {
+      openai: this.tasks.tutor_conversation?.model ?? modelChoices.openai[0],
+      gemini: this.tasks.vocabulary_generation?.model ?? modelChoices.gemini[0],
+    };
+  }
+
+  setModelSelection(selection: { openai: string; gemini: string }): void {
+    if (!(modelChoices.openai as readonly string[]).includes(selection.openai)) throw new Error(`Unsupported OpenAI model: ${selection.openai}`);
+    if (!(modelChoices.gemini as readonly string[]).includes(selection.gemini)) throw new Error(`Unsupported Gemini model: ${selection.gemini}`);
+    for (const task of Object.values(this.tasks)) {
+      task.model = task.provider === "openai" ? selection.openai : selection.gemini;
+    }
+  }
+
   configure(provider: "openai" | "gemini", apiKey: string): void {
     if (provider === "openai") this.openai = new OpenAI({ apiKey });
     else this.gemini = new GoogleGenAI({ apiKey });
@@ -114,7 +134,7 @@ export class ModelRouter implements ModelGateway {
         model: task.model,
         input: prompt,
         max_output_tokens: task.max_output_tokens,
-        ...(task.reasoning_effort ? { reasoning: { effort: task.reasoning_effort } } : {}),
+        ...(task.reasoning_effort && supportsReasoning(task.model) ? { reasoning: { effort: task.reasoning_effort } } : {}),
         text: { format: { type: "json_schema", name: task.schema.replace(/-/g, "_"), strict: true, schema: schema as Record<string, unknown> } },
       });
       const usage = response.usage;
@@ -153,6 +173,10 @@ export class ModelRouter implements ModelGateway {
     if (!validator(parsed)) throw new Error(`Provider output violates ${definitionName}: ${JSON.stringify(validator.errors)}`);
     return parsed as T;
   }
+}
+
+function supportsReasoning(model: string): boolean {
+  return model.startsWith("gpt-5.") || model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4");
 }
 
 export function calculateCostMicrousd(usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number }, pricing: ModelPricing): number {

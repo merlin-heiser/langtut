@@ -1,9 +1,20 @@
 import { randomUUID } from "node:crypto";
+import { appendFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 import type { CandidateItem, CurriculumModule, GeneratedItems, Job, VerificationResult } from "@langtut/contracts";
-import { deriveModuleStatus, isNearDuplicate, normalizeSlovak, validateCandidate } from "@langtut/domain";
+import { deriveModuleStatus, isNearDuplicate, normalizeSlovak, validateCandidate, validateLearningRole } from "@langtut/domain";
 import type { Store } from "./database.js";
 import type { AnkiGateway } from "./anki.js";
 import type { ModelGateway } from "./providers.js";
+
+interface ImportResult {
+  generated: number;
+  deterministicRejected: number;
+  semanticRejected: number;
+  ankiRejected: number;
+  imported: number;
+  issues: Record<string, number>;
+}
 
 export class ContentPipeline {
   constructor(
@@ -11,6 +22,7 @@ export class ContentPipeline {
     private readonly anki: AnkiGateway,
     private readonly models: ModelGateway,
     private readonly allowedTags: Set<string>,
+    private readonly diagnosticPath?: string,
   ) {}
 
   start(module: CurriculumModule): Job {
@@ -18,8 +30,11 @@ export class ContentPipeline {
     const job: Job = { id: randomUUID(), kind: "prepare-module", moduleId: module.id, status: "queued", progress: 0, message: "Vorbereitung eingeplant", createdAt: now, updatedAt: now };
     this.store.createJob(job);
     this.store.setStatus(module.id, "preparing");
+    void this.log({ event: "job_started", jobId: job.id, moduleId: module.id });
     setImmediate(() => this.run(job.id, module).catch((error) => {
-      this.store.updateJob(job.id, { status: "failed", error: error instanceof Error ? error.message : String(error), message: "Vorbereitung fehlgeschlagen" });
+      const message = error instanceof Error ? error.message : String(error);
+      this.store.updateJob(job.id, { status: "failed", error: message, message: "Vorbereitung fehlgeschlagen" });
+      void this.log({ event: "job_failed", jobId: job.id, moduleId: module.id, error: message });
     }));
     return job;
   }
@@ -30,23 +45,32 @@ export class ContentPipeline {
     if (!anki.reachable) throw new Error(`Anki ist nicht erreichbar: ${anki.error ?? "unbekannter Fehler"}`);
     this.store.updateJob(jobId, { status: "running", progress: 0.02, message: "Richte Langtut-Modelle in Anki sicher ein" });
     await this.anki.applySetup();
+    const retracted = await this.retractMisclassifiedVocab(jobId, module);
+    if (retracted) this.store.updateJob(jobId, { status: "running", message: `${retracted} falsch klassifizierte Vokabel-Notes zurückgezogen; erzeuge lexikalischen Ersatz` });
 
     let importedVocab = this.store.countItems(module.id, "vocab");
-    let attempts = 0;
-    while (importedVocab < module.vocabTarget && attempts++ < Math.ceil(module.vocabTarget / 20) * 3) {
+    const initiallyMissing = Math.max(0, module.vocabTarget - importedVocab);
+    const maxBatches = Math.ceil(initiallyMissing / 20) + 2;
+    let batchesExecuted = 0;
+    for (let batch = 1; importedVocab < module.vocabTarget && batch <= maxBatches; batch++) {
+      batchesExecuted = batch;
       const count = Math.min(20, module.vocabTarget - importedVocab);
-      const items = await this.generate(module, "vocab", count);
-      importedVocab += await this.verifyAndImport(module, items);
-      this.store.updateJob(jobId, { progress: Math.min(0.75, importedVocab / Math.max(1, module.vocabTarget) * 0.75), message: `${importedVocab}/${module.vocabTarget} Vokabeln importiert` });
+      const exclusions = this.store.generationExclusions(module.id);
+      await this.log({ event: "batch_started", jobId, moduleId: module.id, kind: "vocab", batch, maxBatches, requested: count, alreadyImported: importedVocab, exclusions: exclusions.length });
+      const items = await this.generate(module, "vocab", count, exclusions);
+      const result = await this.verifyAndImport(module, items);
+      importedVocab += result.imported;
+      await this.log({ event: "batch_finished", jobId, moduleId: module.id, kind: "vocab", batch, requested: count, ...result, importedTotal: importedVocab });
+      this.store.updateJob(jobId, { progress: Math.min(0.75, importedVocab / Math.max(1, module.vocabTarget) * 0.75), message: `Batch ${batch}/${maxBatches}: ${importedVocab}/${module.vocabTarget} Vokabeln importiert` });
     }
-    if (importedVocab < module.vocabTarget) throw new Error(`Vokabelziel nach ${attempts} Batches nicht erreicht; abgelehnte Einträge liegen in Quarantäne.`);
+    if (importedVocab < module.vocabTarget) throw new Error(`Vokabelziel nach ${batchesExecuted} Batches nicht erreicht; ${module.vocabTarget - importedVocab} Einträge fehlen. Details: data/diagnostics/content-pipeline.jsonl`);
 
     const missingFunctions = module.functions.filter((id) => !this.store.importedCoverage(module.id, "chunk", "functionId").includes(id));
-    const chunks = missingFunctions.length ? await this.generate(module, "chunk", missingFunctions.length) : [];
+    const chunks = missingFunctions.length ? await this.generate(module, "chunk", missingFunctions.length, this.store.generationExclusions(module.id)) : [];
     await this.verifyAndImport(module, chunks);
     this.store.updateJob(jobId, { progress: 0.85, message: "Chunks importiert" });
     const missingMilestones = module.grammarMilestones.filter(({ id }) => !this.store.importedCoverage(module.id, "rule", "milestoneId").includes(id));
-    const rules = missingMilestones.length ? await this.generate(module, "rule", missingMilestones.length) : [];
+    const rules = missingMilestones.length ? await this.generate(module, "rule", missingMilestones.length, this.store.generationExclusions(module.id)) : [];
     await this.verifyAndImport(module, rules);
 
     const evidence = this.store.getEvidence(module.id);
@@ -56,53 +80,118 @@ export class ContentPipeline {
     const status = deriveModuleStatus("preparing", module, evidence);
     this.store.saveEvidence(module.id, evidence, status);
     this.store.updateJob(jobId, { status: "completed", progress: 1, message: "Modulmaterial vollständig vorbereitet; Milestone-Aufgaben stehen noch aus." });
+    await this.log({ event: "job_completed", jobId, moduleId: module.id, importedVocab: evidence.importedVocab, importedFunctions: evidence.importedFunctions.length, importedMilestones: evidence.importedMilestones.length });
   }
 
-  private async generate(module: CurriculumModule, kind: CandidateItem["kind"], count: number): Promise<CandidateItem[]> {
+  private async generate(module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[]): Promise<CandidateItem[]> {
     const taskId = kind === "vocab" ? "vocabulary_generation" : kind === "chunk" ? "chunk_generation" : "rule_generation";
-    const prompt = `Erzeuge exakt ${count} ${kind}-Lernobjekte für Slowakisch (Erklärungssprache Deutsch).
-Modul: ${module.id} – ${module.title}; Niveau: ${module.displayLevel}; Domänen: ${module.vocabDomains.join(", ")}.
-Funktionen: ${module.functions.join(", ")}. Grammatikziele: ${module.grammarMilestones.map((m) => `${m.id}: ${m.description}`).join(" | ")}.
-Verwende ausschließlich diese fachlichen Tags: ${module.focusTags.join(", ")}.
-Jedes Objekt enthält genau eine primäre Information, korrekte slowakische Diakritik und natürliche beidsprachige Beispiele.
-kind muss "${kind}" und moduleId muss "${module.id}" sein. itemId muss stabil und eindeutig wirken.
-Für chunks ordne functionId zu; für rules milestoneId.`;
+    const prompt = buildGenerationPrompt(module, kind, count, exclusions);
     const result = await this.models.structured<GeneratedItems>(taskId, prompt, "GeneratedItems");
     return result.items.map((item) => ({ ...item, slovak: normalizeSlovak(item.slovak), exampleSlovak: normalizeSlovak(item.exampleSlovak) }));
   }
 
-  private async verifyAndImport(module: CurriculumModule, items: CandidateItem[]): Promise<number> {
+  private async verifyAndImport(module: CurriculumModule, items: CandidateItem[]): Promise<ImportResult> {
     const existing = this.store.existingFronts();
+    const seen = [...existing];
     const clean: CandidateItem[] = [];
+    const issuesByName: Record<string, number> = {};
+    let deterministicRejected = 0;
     for (const item of items) {
       const issues = validateCandidate(item, this.allowedTags);
+      issues.push(...validateLearningRole(item));
       if (item.moduleId !== module.id) issues.push("wrong_module");
       if (item.kind === "chunk" && !module.functions.includes(item.functionId ?? "")) issues.push("unknown_function");
       if (item.kind === "rule" && !module.grammarMilestones.some(({ id }) => id === item.milestoneId)) issues.push("unknown_milestone");
-      if (existing.some((front) => isNearDuplicate(front, item.slovak))) issues.push("duplicate_or_near_duplicate");
-      if (issues.length) this.store.quarantine(item, item, issues);
-      else clean.push(item);
+      if (seen.some((front) => isNearDuplicate(front, item.slovak))) issues.push("duplicate_or_near_duplicate");
+      if (issues.length) {
+        deterministicRejected++;
+        for (const issue of issues) issuesByName[issue] = (issuesByName[issue] ?? 0) + 1;
+        this.store.quarantine(item, item, issues);
+      } else {
+        clean.push(item);
+        seen.push(item.slovak);
+      }
     }
-    if (!clean.length) return 0;
-    const verificationPrompt = `Prüfe die folgenden slowakisch-deutschen Lernobjekte unabhängig auf korrekte Übersetzung, Natürlichkeit, Beispielsätze und Passung zu ${module.displayLevel}.
-Genehmige nur fachlich sichere Einträge. Gib für jedes itemId approved und issues zurück.\n${JSON.stringify(clean)}`;
+    if (!clean.length) return { generated: items.length, deterministicRejected, semanticRejected: 0, ankiRejected: 0, imported: 0, issues: issuesByName };
+    const roleRubric = clean[0]?.kind === "vocab"
+      ? "Vocab muss eine kommunikativ verwendbare lexikalische Einheit in Wörterbuchform sein. Lehne Metasprache, einzelne Schriftzeichen, isolierte Flexionszellen und Begriffe ab, deren Hauptzweck das Benennen eines Grammatik-/Aussprachekonzepts ist. Solche Inhalte gehören in Rule-Notes oder Übungen."
+      : clean[0]?.kind === "chunk"
+        ? "Chunks müssen direkt verwendbare feste Wendungen sein; bloße Funktions- oder Grammatikbezeichnungen sind abzulehnen."
+        : "Bei Rule-Notes ist notwendige Metasprache erlaubt, muss aber knapp, korrekt und beispielgestützt sein.";
+    const verificationPrompt = `Prüfe die folgenden slowakisch-deutschen Lernobjekte unabhängig auf korrekte Übersetzung, Natürlichkeit, Beispielsätze, pädagogische Rolle und Passung zu ${module.displayLevel}.
+${roleRubric} Lehne außerdem bei Fehlern, Irreführung, unnatürlicher Sprache oder falscher Modulpassung ab. Gib für jedes itemId approved und issues zurück.\n${JSON.stringify(clean)}`;
     const verification = await this.models.structured<VerificationResult>("content_verification", verificationPrompt, "VerificationResult");
     const decision = new Map(verification.results.map((result) => [result.itemId, result]));
+    let semanticRejected = 0;
     const approved = clean.filter((item) => {
       const result = decision.get(item.itemId);
-      if (!result?.approved) this.store.quarantine(item, item, result?.issues ?? ["missing_verification"]);
+      if (!result?.approved) {
+        semanticRejected++;
+        const issues = result?.issues ?? ["missing_verification"];
+        for (const issue of issues) issuesByName[issue] = (issuesByName[issue] ?? 0) + 1;
+        this.store.quarantine(item, item, issues);
+      }
       return result?.approved;
     });
-    if (!approved.length) return 0;
+    if (!approved.length) return { generated: items.length, deterministicRejected, semanticRejected, ankiRejected: 0, imported: 0, issues: issuesByName };
     const noteIds = await this.anki.addItems(approved);
     let imported = 0;
+    let ankiRejected = 0;
     approved.forEach((item, index) => {
       const noteId = noteIds[index];
       if (noteId) {
         this.store.saveGenerated({ itemId: item.itemId, moduleId: item.moduleId, kind: item.kind, normalized: normalizeSlovak(item.slovak), payload: item }, "imported", noteId);
         imported++;
-      } else this.store.quarantine(item, item, ["anki_rejected_note"]);
+      } else {
+        ankiRejected++;
+        issuesByName.anki_rejected_note = (issuesByName.anki_rejected_note ?? 0) + 1;
+        this.store.quarantine(item, item, ["anki_rejected_note"]);
+      }
     });
-    return imported;
+    return { generated: items.length, deterministicRejected, semanticRejected, ankiRejected, imported, issues: issuesByName };
   }
+
+  private async retractMisclassifiedVocab(jobId: string, module: CurriculumModule): Promise<number> {
+    const invalid = this.store.importedItems<CandidateItem>(module.id, "vocab")
+      .map((entry) => ({ ...entry, issues: validateLearningRole(entry.item) }))
+      .filter(({ issues }) => issues.length > 0);
+    if (!invalid.length) return 0;
+    const noteIds = invalid.flatMap(({ ankiNoteId }) => ankiNoteId ? [ankiNoteId] : []);
+    await this.anki.removeNotes(noteIds);
+    for (const { item, issues } of invalid) this.store.retractGenerated(item, item, issues);
+    await this.log({ event: "imported_content_retracted", jobId, moduleId: module.id, kind: "vocab", count: invalid.length, ankiNotesRemoved: noteIds.length, issues: countIssues(invalid.flatMap(({ issues }) => issues)) });
+    return invalid.length;
+  }
+
+  private async log(payload: Record<string, unknown>): Promise<void> {
+    if (!this.diagnosticPath) return;
+    try {
+      await mkdir(path.dirname(this.diagnosticPath), { recursive: true });
+      await appendFile(this.diagnosticPath, `${JSON.stringify({ at: new Date().toISOString(), ...payload })}\n`, "utf8");
+    } catch {
+      // Diagnostics must never change learning state or retry semantics.
+    }
+  }
+}
+
+function countIssues(issues: string[]): Record<string, number> {
+  return issues.reduce<Record<string, number>>((counts, issue) => ({ ...counts, [issue]: (counts[issue] ?? 0) + 1 }), {});
+}
+
+export function buildGenerationPrompt(module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[]): string {
+  const roleInstruction = kind === "vocab"
+    ? `Erzeuge lexikalischen Wortschatz aus diesen Domänen: ${module.vocabDomains.join(", ")}.
+Erzeuge keine sprachwissenschaftlichen Bezeichnungen (z. B. Kasus, Vokal, Betonung, Aspekt, Satzart), keine einzelnen Buchstaben oder Zeichen und keine einzelnen Formen eines Konjugations-/Deklinationsparadigmas. Verben stehen grundsätzlich im Infinitiv, Nomen in der Wörterbuchform und Adjektive in der Grundform. Funktionswörter wie čo, kde oder keď sind zulässig, wenn sie selbst kommunikativ gebraucht werden. Die deutsche Seite ist eine direkte lexikalische Übersetzung; der Beispielsatz zeigt Alltagsgebrauch und erklärt keine Sprachregel.`
+    : kind === "chunk"
+      ? `Erzeuge feste, direkt verwendbare Wendungen, die genau diese kommunikativen Funktionen realisieren: ${module.functions.join(", ")}. Erzeuge keine bloßen Namen der Funktionen und keine Grammatikterminologie.`
+      : `Erzeuge je Grammatik-Milestone eine verständliche Regel-/Abrufnote für diese Ziele: ${module.grammarMilestones.map((m) => `${m.id}: ${m.description}`).join(" | ")}. Hier ist notwendige Metasprache erlaubt, sofern sie knapp erklärt und an konkreten slowakischen Beispielen gezeigt wird.`;
+  return `Erzeuge exakt ${count} ${kind}-Lernobjekte für Slowakisch (Erklärungssprache Deutsch).
+Modulkennung: ${module.id}; Niveau: ${module.displayLevel}.
+${roleInstruction}
+Verwende ausschließlich diese fachlichen Tags: ${module.focusTags.join(", ")}.
+Jedes Objekt enthält genau eine primäre Information, korrekte slowakische Diakritik und natürliche beidsprachige Beispiele.
+Formuliere Übersetzung, Notiz und Beispiele knapp: eine kurze Notiz und je ein kurzer Beispielsatz genügen.
+Bereits verwendete oder abgelehnte slowakische Vorderseiten (auch keine bloßen Schreibvarianten erneut erzeugen): ${JSON.stringify(exclusions)}.
+kind muss "${kind}" und moduleId muss "${module.id}" sein. itemId muss stabil und eindeutig wirken.
+Für chunks ordne functionId zu; für rules milestoneId.`;
 }

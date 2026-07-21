@@ -9,6 +9,8 @@ type TutorTurn = { message: string; correction: string; explanation: string; new
 type TutorReport = { focusTags: string[]; observedErrors: string[]; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
 type TutorSession = { id: string; status: string; moduleId?: string };
 type ApiCostSummary = { currency: "USD"; weekCost: number; totalCost: number; weekInputTokens: number; weekOutputTokens: number; totalInputTokens: number; totalOutputTokens: number; weekStartedAt: string; trackedSince: string | null; pricingVersion: string };
+type Settings = { anki: { configured: boolean }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } } };
+type ModelSettingsResponse = Pick<Settings, "models">;
 
 export function App() {
   const [status, setStatus] = useState<Status>();
@@ -28,13 +30,16 @@ export function App() {
   const [apiKeyDialog, setApiKeyDialog] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [settings, setSettings] = useState<Settings>();
+  const [savingModels, setSavingModels] = useState(false);
 
   const reload = async () => {
-    const [nextStatus, nextCosts, nextCurriculum, latestPlacement, latestJob] = await Promise.all([
-      api<Status>("/status"), api<ApiCostSummary>("/costs/summary"), api<Curriculum>("/curriculum"), api<Placement | null>("/placement-sessions/latest"), api<Job | null>("/jobs/latest"),
+    const [nextStatus, nextCosts, nextCurriculum, latestPlacement, latestJob, nextSettings] = await Promise.all([
+      api<Status>("/status"), api<ApiCostSummary>("/costs/summary"), api<Curriculum>("/curriculum"), api<Placement | null>("/placement-sessions/latest"), api<Job | null>("/jobs/latest"), api<Settings>("/settings"),
     ]);
     setStatus(nextStatus); setCosts(nextCosts); setCurriculum(nextCurriculum); setPlacement(latestPlacement ?? undefined);
     setJob(latestJob && latestJob.status !== "completed" ? latestJob : undefined);
+    setSettings(nextSettings);
   };
   const refreshCosts = async () => setCosts(await api<ApiCostSummary>("/costs/summary"));
   const handleError = (error: unknown) => {
@@ -112,6 +117,15 @@ export function App() {
     } catch (error) { handleError(error); } finally { setSavingKey(false); }
   }
 
+  async function saveModels(selection: Settings["models"]["selection"]) {
+    setSavingModels(true);
+    try {
+      const result = await post<ModelSettingsResponse>("/settings/models", selection);
+      if (settings) setSettings({ ...settings, models: result.models });
+      setNotice("Modellauswahl gespeichert.");
+    } catch (error) { handleError(error); } finally { setSavingModels(false); }
+  }
+
   return <main>
     <header className="hero">
       <div><span className="eyebrow">SLOVENSKÝ TUTOR</span><h1>Dobrý deň.<br /><em>Čo dnes?</em></h1></div>
@@ -120,7 +134,7 @@ export function App() {
 
     {notice && <aside className="notice">{notice}</aside>}
 
-    {screen === "settings" && <section className="settings-page"><div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div><article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article></section>}
+    {screen === "settings" && <section className="settings-page"><div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div><article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article><article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert. Für eine getrennte Wahl pro Aufgabe können wir später ein feineres Profil ergänzen.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article></section>}
 
     {screen === "dashboard" && <><section className="today">
       <div className="section-title"><span>01</span><h2>Heute</h2></div>

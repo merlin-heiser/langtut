@@ -185,6 +185,22 @@ export class Store {
     return row.count;
   }
 
+  importedItems<T>(moduleId: string, kind: string): Array<{ item: T; ankiNoteId?: number }> {
+    const rows = this.db.prepare("SELECT payload_json,anki_note_id FROM generated_items WHERE module_id=? AND kind=? AND validation_status='imported'").all(moduleId, kind) as Array<{ payload_json: string; anki_note_id: number | null }>;
+    return rows.map((row) => ({ item: JSON.parse(row.payload_json) as T, ...(row.anki_note_id ? { ankiNoteId: row.anki_note_id } : {}) }));
+  }
+
+  retractGenerated(item: { itemId: string; moduleId: string }, payload: unknown, issues: string[]): void {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE generated_items SET validation_status='retracted' WHERE item_id=?").run(item.itemId);
+      this.db.prepare("INSERT INTO quarantine(item_id,module_id,issues_json,payload_json,created_at) VALUES (?,?,?,?,?)")
+        .run(item.itemId, item.moduleId, JSON.stringify(issues), JSON.stringify(payload), now);
+      this.db.prepare("INSERT INTO import_events(item_id,action,payload_json,created_at) VALUES (?,?,?,?)")
+        .run(item.itemId, "retracted", JSON.stringify({ moduleId: item.moduleId, issues }), now);
+    })();
+  }
+
   importedCoverage(moduleId: string, kind: string, field: "functionId" | "milestoneId"): string[] {
     const rows = this.db.prepare("SELECT payload_json FROM generated_items WHERE module_id=? AND kind=? AND validation_status='imported'").all(moduleId, kind) as Array<{ payload_json: string }>;
     return [...new Set(rows.map((row) => (JSON.parse(row.payload_json) as Record<string, unknown>)[field]).filter((value): value is string => typeof value === "string"))];
@@ -193,6 +209,16 @@ export class Store {
   existingFronts(): string[] {
     const rows = this.db.prepare("SELECT normalized_slovak FROM generated_items WHERE validation_status IN ('approved','imported')").all() as Array<{ normalized_slovak: string }>;
     return rows.map((row) => row.normalized_slovak);
+  }
+
+  generationExclusions(moduleId: string): string[] {
+    const quarantined = this.db.prepare("SELECT payload_json FROM quarantine WHERE module_id=? AND resolved_at IS NULL").all(moduleId) as Array<{ payload_json: string }>;
+    const fronts = [...this.existingFronts()];
+    for (const row of quarantined) {
+      const payload = JSON.parse(row.payload_json) as { slovak?: unknown };
+      if (typeof payload.slovak === "string" && payload.slovak.trim()) fronts.push(payload.slovak.normalize("NFC").trim());
+    }
+    return [...new Set(fronts)];
   }
 
   saveGenerated(item: { itemId: string; moduleId: string; kind: string; normalized: string; payload: unknown }, status: string, ankiNoteId?: number): void {

@@ -4,6 +4,7 @@ coverage/
 data/*.db
 data/*.db-*
 data/exports/
+data/diagnostics/
 .env
 *.log
 .vite/

@@ -11,7 +11,7 @@ import { loadConfig } from "./config.js";
 import { ContentPipeline } from "./content-pipeline.js";
 import { Store } from "./database.js";
 import { newPlacement, placementItems, recommendation, scoreAnswer } from "./placement.js";
-import { ModelRouter, type ModelGateway } from "./providers.js";
+import { ModelRouter, modelChoices, type ModelGateway } from "./providers.js";
 
 type PlacementState = ReturnType<typeof newPlacement> & { answers: Array<{ itemId: string; correct: boolean }>; recommendedModuleId?: string };
 
@@ -19,6 +19,8 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   const config = await loadConfig(root);
   const store = await Store.open(config.dbPath, root);
   const models = overrides.models ?? await ModelRouter.load(root, config.modelTasksPath, (event) => store.recordApiUsage(event));
+  const savedModelSelection = store.getSetting<{ openai: string; gemini: string }>("models.selection");
+  if (savedModelSelection && models instanceof ModelRouter) models.setModelSelection(savedModelSelection);
   const anki = overrides.anki ?? new AnkiClient(config.anki.url, config.anki.deck, config.anki.key);
   const savedAnkiKey = store.getSetting<string>("anki.connect_api_key");
   if (savedAnkiKey && anki instanceof AnkiClient) {
@@ -33,7 +35,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   }
   const tagsDocument = YAML.parse(await readFile(path.join(root, "slowakisch_ai_tutor_recovery_bundle/tag_schema.yaml"), "utf8")) as { categories: Record<string, string[]> };
   const allowedTags = new Set(Object.values(tagsDocument.categories).flat());
-  const pipeline = new ContentPipeline(store, anki, models, allowedTags);
+  const pipeline = new ContentPipeline(store, anki, models, allowedTags, path.join(path.dirname(config.dbPath), "diagnostics/content-pipeline.jsonl"));
   const app = Fastify({ logger: true });
   await app.register(cors, { origin: true });
 
@@ -53,7 +55,25 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   });
   app.get("/api/v1/costs/summary", async () => store.getApiCostSummary(new Date(), models.pricingVersion?.() ?? "untracked"));
 
-  app.get("/api/v1/settings", async () => ({ anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key) } }));
+  app.get("/api/v1/settings", async () => ({
+    anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key) },
+    models: {
+      selection: models instanceof ModelRouter ? models.modelSelection() : undefined,
+      choices: modelChoices,
+    },
+  }));
+  app.post<{ Body: { openai?: string; gemini?: string } }>("/api/v1/settings/models", async (request, reply) => {
+    if (!(models instanceof ModelRouter)) return reply.code(409).send({ error: "runtime_model_configuration_unavailable" });
+    const current = models.modelSelection();
+    const selection = { openai: request.body?.openai ?? current.openai, gemini: request.body?.gemini ?? current.gemini };
+    try {
+      models.setModelSelection(selection);
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    store.setSetting("models.selection", selection);
+    return { models: { selection, choices: modelChoices } };
+  });
   app.post<{ Body: { apiKey?: string } }>("/api/v1/settings/anki-api-key", async (request, reply) => {
     const apiKey = request.body?.apiKey?.trim();
     if (!apiKey) return reply.code(400).send({ error: "anki_api_key_required" });

@@ -19,6 +19,35 @@ export function validateCandidate(item: CandidateItem, allowedTags: Set<string>)
   return issues;
 }
 
+const metalanguageFronts = new Set([
+  "dlzen", "makcen", "pravopis", "prizvuk", "samohlaska", "spoluhlaska", "slabika",
+  "nominativ", "akuzativ", "genitiv", "dativ", "lokal", "instrumental", "vokativ",
+  "predlozka", "zameno", "pridavne meno", "prislovka", "slovesny vid", "vid",
+  "slovosled", "vedlajsia veta", "vztazna veta", "podmienovaci sposob", "rozkazovaci sposob",
+  "minuly cas", "buduci cas", "pritomny cas", "l-participium", "formalny register",
+]);
+
+const metalanguageGerman = /\b(?:Längenzeichen|Weichheitszeichen|Vokallänge|Rechtschreibung|Wortbetonung|Betonung|Akzent(?:zeichen)?|Vokal|Konsonant|Silbe|Nominativ|Akkusativ|Genitiv|Dativ|Lokativ|Instrumental|Vokativ|Kasus|Fallform|Präposition|Pronomen|Adjektiv|Adverb|Konjugation|Deklination|Wortstellung|Nebensatz|Relativsatz|Konditional|Imperativ|Verbalaspekt|Tempus|Zeitform|Partizip|formales? Register)\b/i;
+const paradigmMarker = /\b(?:[123]\.?\s*Person|Person\s+(?:Singular|Plural)|Singularform|Pluralform|konjugierte Form|Form von)\b/i;
+const phonologyContext = /\b(?:Aussprache|Vokal|Konsonant|Silbe|Laut|Betonung|Akzent)\b/i;
+const lowercaseClosedClass = new Set(["ja", "ty", "on", "ona", "ono", "my", "vy", "oni", "ony", "co", "kto", "kde", "ako", "ano", "nie", "sa", "si"]);
+
+/**
+ * Vocab notes count lexical competence. Labels for grammar/phonology, isolated
+ * symbols and cells of an inflection paradigm belong to rules or exercises.
+ */
+export function validateLearningRole(item: CandidateItem): string[] {
+  if (item.kind !== "vocab") return [];
+  const issues: string[] = [];
+  const front = stripDiacritics(item.slovak);
+  if (/^\p{L}$/u.test(item.slovak.trim())) issues.push("vocab_is_symbol_not_lexeme");
+  if (metalanguageFronts.has(front) || metalanguageGerman.test(item.german)) issues.push("vocab_is_metalanguage");
+  if (["makky", "tvrdy"].includes(front) && phonologyContext.test(`${item.german} ${item.notes} ${item.exampleGerman}`)) issues.push("vocab_is_metalanguage");
+  if (paradigmMarker.test(item.notes)) issues.push("vocab_is_inflection_cell");
+  if (lowercaseClosedClass.has(front) && item.slovak !== item.slovak.toLocaleLowerCase("sk")) issues.push("vocab_noncanonical_dictionary_form");
+  return [...new Set(issues)];
+}
+
 export function isNearDuplicate(a: string, b: string): boolean {
   const left = stripDiacritics(a);
   const right = stripDiacritics(b);

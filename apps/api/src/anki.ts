@@ -7,6 +7,7 @@ export interface AnkiGateway {
   setupPreview(): Promise<SetupPreview>;
   applySetup(): Promise<SetupPreview>;
   addItems(items: CandidateItem[]): Promise<Array<number | null>>;
+  removeNotes(noteIds: number[]): Promise<void>;
 }
 
 export class AnkiClient implements AnkiGateway {
@@ -124,6 +125,10 @@ export class AnkiClient implements AnkiGateway {
     const ids = accepted.length ? await this.invoke<Array<number | null>>("addNotes", { notes: accepted }) : [];
     let cursor = 0;
     return canAdd.map((allowed) => allowed ? ids[cursor++] ?? null : null);
+  }
+
+  async removeNotes(noteIds: number[]): Promise<void> {
+    if (noteIds.length) await this.invoke("deleteNotes", { notes: noteIds });
   }
 }
 
