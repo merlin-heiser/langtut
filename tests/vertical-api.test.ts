@@ -51,15 +51,21 @@ class FakeModels implements ModelGateway {
       const items = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)) as CandidateItem[];
       return { results: items.map(({ itemId }) => ({ itemId, approved: true, issues: [] })) } as VerificationResult as T;
     }
-    if (definitionName === "TutorTurn") return {
-      message: prompt.includes("Eröffne dieses Rollenspiel") ? "Dobrý deň, ako sa voláte?" : "Teší ma. Odkiaľ ste?",
-      correction: prompt.includes("Lernereingabe") ? "Volám sa Anna." : "", explanation: "", newExample: "", errorTags: prompt.includes("Lernereingabe") ? ["grammar_reflexive"] : [],
-    } as TutorTurn as T;
+    if (definitionName === "TutorTurn") {
+      const opening = prompt.includes("Eröffne dieses Rollenspiel");
+      const sourceLanguage = prompt.includes("Lernereingabe: Ich bin zu Besuch");
+      const farewell = prompt.includes("Lernereingabe: Dovidenia") || prompt.includes("letzte erlaubte Lernendenzug");
+      return {
+        message: opening ? "Dobrý deň, ako sa voláte?" : farewell ? "Ďakujem za rozhovor. Dovidenia!" : sourceLanguage ? "Aha, ste na návšteve! Čo vás sem priviedlo?" : "Teší ma. Odkiaľ ste?",
+        correction: opening ? "" : sourceLanguage ? "Som tu na návšteve." : "Volám sa Anna.", explanation: sourceLanguage ? "Formuliere die Antwort auf Slowakisch." : "", newExample: "",
+        errorTags: opening ? [] : sourceLanguage ? ["error_language_switch"] : ["grammar_reflexive"], targetLanguageUse: sourceLanguage ? "source" : "target", goalProgress: opening ? "partial" : sourceLanguage ? "not_met" : "partial", conversationState: farewell ? "completed" : "continue",
+      } as TutorTurn as T;
+    }
     if (definitionName === "SessionAnalysis") {
       if (this.failAnalysis) throw new Error("analysis unavailable");
       this.reportPrompt = prompt;
       return {
-        report: { focusTags: this.module.focusTags, observedErrors: ["Reflexives Verb"], observedStrengths: ["Antwortet verständlich"], suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: ["Vorstellung wiederholen"] },
+        report: { focusTags: this.module.focusTags, observedErrors: ["Reflexives Verb"], observedStrengths: ["Antwortet verständlich"], languageSwitches: 0, goalCompletionPercent: 50, suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: ["Vorstellung wiederholen"] },
         profile: { interests: ["Reisen"], strengths: ["Verständliche Antworten"], difficulties: ["Reflexive Verben"], helpfulSupports: ["Kurze Modelle"], priorities: ["Vorstellung"] },
         rapportMarkdown: "# Lernrapport\n\n## Interessen und Präferenzen\n- Reisen\n\n## Stärken\n- Verständliche Antworten\n\n## Schwierigkeiten\n- Reflexive Verben\n\n## Hilfreiche Unterstützung\n- Kurze Modelle\n\n## Aktuelle Prioritäten\n- Vorstellung\n",
       } as SessionAnalysis as T;
@@ -198,5 +204,45 @@ describe("vertical release path with fake integrations", () => {
     expect(store.getSession(started.id)?.status).toBe("completed");
     store.close();
     await expect(readFile(path.join(temporary, "rapports", "slowakisch-deutsch", "rapport.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps source-language corrections outside the partner message and deducts them from goal completion", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-language-switch-"));
+    process.env.LANGTUT_DB_PATH = path.join(temporary, "language.db");
+    const module = (await loadCurriculum(process.cwd())).modules[2];
+    const models = new FakeModels(module);
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models });
+    const started = (await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: "rp-meet-neighbor" } })).json();
+    const turn = await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/activity-turns`, payload: { message: "Ich bin zu Besuch" } });
+    expect(turn.json()).toMatchObject({ completed: false, turns: [{ turn: { message: "Aha, ste na návšteve! Čo vás sem priviedlo?", correction: "Som tu na návšteve.", targetLanguageUse: "source", goalProgress: "not_met", errorTags: ["error_language_switch"] } }] });
+    const report = await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/complete` });
+    expect(report.json()).toMatchObject({ languageSwitches: 1, goalCompletionPercent: 0 });
+    expect(models.reportPrompt).toContain('"languageSwitches":1');
+    await app.close();
+  });
+
+  it("recognizes a learner farewell, replies in character and returns the report automatically", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-farewell-"));
+    process.env.LANGTUT_DB_PATH = path.join(temporary, "farewell.db");
+    const module = (await loadCurriculum(process.cwd())).modules[2];
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models: new FakeModels(module) });
+    const started = (await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: "rp-meet-neighbor" } })).json();
+    const ending = await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/activity-turns`, payload: { message: "Dovidenia" } });
+    expect(ending.json()).toMatchObject({ completed: true, turns: [{ turn: { message: "Ďakujem za rozhovor. Dovidenia!", conversationState: "completed" } }], report: { goalCompletionPercent: 50 } });
+    const rejected = await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/activity-turns`, payload: { message: "Ešte raz" } });
+    expect(rejected.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("closes a six-round roleplay with a partner farewell instead of failing on the next input", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-round-ending-"));
+    process.env.LANGTUT_DB_PATH = path.join(temporary, "rounds.db");
+    const module = (await loadCurriculum(process.cwd())).modules[0];
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models: new FakeModels(module) });
+    const started = (await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: "rp-spelling-desk" } })).json();
+    let response: any;
+    for (let round = 1; round <= 6; round++) response = (await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/activity-turns`, payload: { message: `Odpoveď ${round}` } })).json();
+    expect(response).toMatchObject({ completed: true, turns: [{ turn: { message: "Ďakujem za rozhovor. Dovidenia!", conversationState: "completed" } }], report: { goalCompletionPercent: 50 } });
+    await app.close();
   });
 });

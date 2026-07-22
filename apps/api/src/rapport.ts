@@ -20,10 +20,33 @@ export function aggregateErrorTags(events: SessionEvent[]): Record<string, numbe
   const counts: Record<string, number> = {};
   for (const event of events) {
     if (event.eventType !== "activity_turn") continue;
-    const tags = (event.payload as { turn?: TutorTurn }).turn?.errorTags ?? [];
+    const payload = event.payload as { turn?: TutorTurn; evaluatesLearner?: boolean };
+    if (payload.evaluatesLearner === false) continue;
+    const tags = payload.turn?.errorTags ?? [];
     for (const tag of new Set(tags.map((value) => plain(value)).filter(Boolean))) counts[tag] = (counts[tag] ?? 0) + 1;
   }
   return counts;
+}
+
+export function aggregateLearningSignals(events: SessionEvent[]): { targetLanguageUse: Record<string, number>; goalProgress: Record<string, number>; languageSwitches: number; goalCompletionPercent: number } {
+  const targetLanguageUse: Record<string, number> = { target: 0, mixed: 0, source: 0 };
+  const goalProgress: Record<string, number> = { met: 0, partial: 0, not_met: 0 };
+  for (const event of events) {
+    if (event.eventType !== "activity_turn") continue;
+    const payload = event.payload as { turn?: TutorTurn; evaluatesLearner?: boolean };
+    if (payload.evaluatesLearner === false) continue;
+    const turn = payload.turn;
+    if (!turn) continue;
+    if (turn.targetLanguageUse in targetLanguageUse) targetLanguageUse[turn.targetLanguageUse]++;
+    if (turn.goalProgress in goalProgress) goalProgress[turn.goalProgress]++;
+  }
+  const evaluated = goalProgress.met + goalProgress.partial + goalProgress.not_met;
+  return {
+    targetLanguageUse,
+    goalProgress,
+    languageSwitches: targetLanguageUse.mixed + targetLanguageUse.source,
+    goalCompletionPercent: evaluated ? Math.round((goalProgress.met + goalProgress.partial * 0.5) / evaluated * 100) : 0,
+  };
 }
 
 export function buildLearnerContext(profile: LearnerProfile | undefined, relevanceTerms: string[]): string {

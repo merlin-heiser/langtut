@@ -5,8 +5,8 @@ import { api, post, uploadPackage } from "./api.js";
 type Status = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
 type Preview = { deck: { name: string; action: string }; models: Array<{ name: string; action: string; managed: boolean; fields: string[]; changes?: string[]; templates?: Record<string, unknown>; css?: string }> };
 type Placement = { id: string; status: string; itemsAnswered: number; maxItems: number; recommendedModuleId?: string; weakTags: string[]; nextItem?: { id: string; prompt: string; level: string; kind: string; choices?: string[] } };
-type TutorTurn = { message: string; correction: string; explanation: string; newExample: string; errorTags: string[] };
-type TutorReport = { focusTags: string[]; observedErrors: string[]; observedStrengths: string[]; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
+type TutorTurn = { message: string; correction: string; explanation: string; newExample: string; errorTags: string[]; targetLanguageUse: "target" | "mixed" | "source"; goalProgress: "met" | "partial" | "not_met"; conversationState: "continue" | "closing" | "completed" };
+type TutorReport = { focusTags: string[]; observedErrors: string[]; observedStrengths: string[]; languageSwitches: number; goalCompletionPercent: number; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
 type ApiCostSummary = { currency: "USD"; weekCost: number; totalCost: number; weekInputTokens: number; weekOutputTokens: number; totalInputTokens: number; totalOutputTokens: number; weekStartedAt: string; trackedSince: string | null; pricingVersion: string };
 type Settings = { anki: { configured: boolean }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } } };
 type ModelSettingsResponse = Pick<Settings, "models">;
@@ -16,6 +16,7 @@ type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; att
 type Activity = { id: string; title: string; description?: string; type?: "roleplay"; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number };
 type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
 type TutorSession = { id: string; status: string; moduleId?: string; activity?: Activity; initialTurns?: ActivityTurn[] };
+type ConversationExchange = { id: string; learner: string; responses: ActivityTurn[]; status: "pending" | "complete" };
 
 export function App() {
   const [status, setStatus] = useState<Status>();
@@ -30,7 +31,8 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [session, setSession] = useState<TutorSession>();
   const [sessionInput, setSessionInput] = useState("");
-  const [turns, setTurns] = useState<Array<{ learner: string; responses: ActivityTurn[] }>>([]);
+  const [turns, setTurns] = useState<ConversationExchange[]>([]);
+  const [sending, setSending] = useState(false);
   const [report, setReport] = useState<TutorReport>();
   const [screen, setScreen] = useState<"dashboard" | "settings">("dashboard");
   const [apiKeyDialog, setApiKeyDialog] = useState(false);
@@ -103,18 +105,30 @@ export function App() {
     setPlan(activePlan);
     const selectedActivityId = availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id;
     setSession(await post<TutorSession>("/sessions", { planId: activePlan.id, moduleId: activePlan.primaryModuleId, activityId: selectedActivityId }));
-    setTurns([]); setReport(undefined);
+    setTurns([]); setReport(undefined); setSending(false); setSessionInput("");
   }
   async function sendTurn() {
-    if (!session || !sessionInput.trim()) return;
-    const learner = sessionInput;
-    const result = await post<{ turns: ActivityTurn[] }>(`/sessions/${session.id}/activity-turns`, { message: learner });
-    setTurns((currentTurns) => [...currentTurns, { learner, responses: result.turns }]); setSessionInput(""); await refreshCosts();
-  }
-  async function completeTutor() {
-    if (!session) return;
-    setReport(await post<TutorReport>(`/sessions/${session.id}/complete`));
-    setSession({ ...session, status: "completed" }); await refreshCosts();
+    const learner = sessionInput.trim();
+    if (!session || !learner || sending || session.status !== "active") return;
+    const exchangeId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setSessionInput("");
+    setSending(true);
+    setTurns((currentTurns) => [...currentTurns, { id: exchangeId, learner, responses: [], status: "pending" }]);
+    try {
+      const result = await post<{ turns: ActivityTurn[]; completed: boolean; report?: TutorReport }>(`/sessions/${session.id}/activity-turns`, { message: learner });
+      setTurns((currentTurns) => currentTurns.map((turn) => turn.id === exchangeId ? { ...turn, responses: result.turns, status: "complete" } : turn));
+      if (result.completed) {
+        setSession((currentSession) => currentSession ? { ...currentSession, status: "completed" } : currentSession);
+        setReport(result.report);
+      }
+      void refreshCosts().catch(handleError);
+    } catch (error) {
+      setTurns((currentTurns) => currentTurns.filter((turn) => turn.id !== exchangeId));
+      setSessionInput((currentInput) => currentInput || learner);
+      handleError(error);
+    } finally {
+      setSending(false);
+    }
   }
   async function recordMilestone(moduleId: string, milestoneId: string) {
     await post(`/modules/${moduleId}/milestones/${milestoneId}/attempt`);
@@ -205,7 +219,25 @@ export function App() {
     <section>
       <div className="section-title"><span>04</span><h2>Tutor-Session</h2></div>
       {!session && <article className="wide-card"><div><small>GEFÜHRTE PRAXIS</small><h3>Aktiv anwenden, gezielt korrigieren.</h3><p>Das Lernpaket bestimmt Rollen und Ablauf; der Player führt die Methode sicher aus.</p>{availableActivities.length > 0 && <label className="activity-picker">Lernmethode<select value={availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id} onChange={(event) => setActivityId(event.target.value)}>{availableActivities.map((activity) => <option key={activity.id} value={activity.id}>{activity.title} · {activity.roles.length} Rollen</option>)}</select></label>}</div><button disabled={placement?.status !== "completed"} onClick={() => startTutor().catch(handleError)}>Session starten</button></article>}
-      {session && <article className="tutor">{session.activity?.type === "roleplay" && <div className="scenario"><small>ROLLENSPIEL</small><h3>{session.activity.title}</h3><p lang={activePackage?.targetLanguage.code}>{session.activity.scenarioTarget}</p><details><summary>Deutsche Erklärung anzeigen</summary><p lang={activePackage?.sourceLanguage.code}>{session.activity.scenarioSource}</p></details></div>}<div className="dialogue">{session.initialTurns?.map((response) => <div className="opening" key={response.roleId}><div className="tutor-answer"><small>{response.roleLabel}</small><b>{response.turn.message}</b></div></div>)}{turns.length === 0 && !(session.initialTurns?.length) && <p className="empty">Schreibe deinen ersten Satz auf {activePackage?.targetLanguage.name ?? "der Zielsprache"}.</p>}{turns.map((turn, index) => <div className="exchange" key={index}><p className="learner">{turn.learner}</p><div>{turn.responses.map((response) => <div className="tutor-answer" key={response.roleId}><small>{response.roleLabel}</small><b>{response.turn.message}</b>{response.turn.correction && <p>Korrektur: {response.turn.correction}</p>}{response.turn.explanation && <p>{response.turn.explanation}</p>}</div>)}</div></div>)}</div>{session.status === "active" && <><div className="answer"><input value={sessionInput} onChange={(e) => setSessionInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendTurn()} placeholder={`Eingabe auf ${activePackage?.targetLanguage.name ?? "der Zielsprache"} …`} /><button onClick={() => sendTurn().catch(handleError)}>Senden</button></div><button className="finish" onClick={() => completeTutor().catch(handleError)}>Session abschließen</button></>}{report && <div className="report"><small>SESSIONBERICHT</small><h3>Beobachtete Lernsignale</h3><p>{report.observedErrors.join(" · ") || "Keine belastbaren Fehler beobachtet."}</p>{report.observedStrengths.length > 0 && <p>Stärken: {report.observedStrengths.join(" · ")}</p>}<div className="tags">{report.focusTags.map((tag) => <span key={tag}>{tag}</span>)}</div><p>Nächster Schritt: {report.nextSessionSuggestions.join(" · ")}</p></div>}</article>}
+      {session && <article className="tutor">
+        {session.activity?.type === "roleplay" && <div className="scenario"><small>ROLLENSPIEL</small><h3>{session.activity.title}</h3><p lang={activePackage?.targetLanguage.code}>{session.activity.scenarioTarget}</p><details><summary>Deutsche Erklärung anzeigen</summary><p lang={activePackage?.sourceLanguage.code}>{session.activity.scenarioSource}</p></details></div>}
+        <div className="dialogue" aria-busy={sending}>
+          {session.initialTurns?.map((response) => <PartnerMessage response={response} key={response.roleId} />)}
+          {turns.length === 0 && !(session.initialTurns?.length) && <p className="empty">Schreibe deinen ersten Satz auf {activePackage?.targetLanguage.name ?? "der Zielsprache"}.</p>}
+          {turns.map((turn) => <div className="turn-stack" key={turn.id}>
+            <LearnerMessage message={turn.learner} responses={turn.responses} />
+            {turn.status === "pending" ? <TypingIndicator /> : turn.responses.map((response) => <PartnerMessage response={response} key={response.roleId} />)}
+          </div>)}
+        </div>
+        {session.status === "active" ? <>
+          <div className="answer chat-input">
+            <input disabled={sending} value={sessionInput} onChange={(e) => setSessionInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && sendTurn()} placeholder={sending ? "Antwort wird geschrieben …" : `Nachricht auf ${activePackage?.targetLanguage.name ?? "der Zielsprache"} …`} />
+            <button disabled={sending || !sessionInput.trim()} onClick={() => sendTurn()}>{sending ? "Sendet …" : "Senden"}</button>
+          </div>
+          <p className="closing-hint">Verabschiede dich situationsgerecht, wenn du das Gespräch früher beenden möchtest.</p>
+        </> : <div className="answer chat-input completed-input"><input disabled placeholder="Konversation abgeschlossen" /><button disabled>Senden</button></div>}
+        {report && <div className="report"><small>SESSIONBERICHT</small><h3>Beobachtete Lernsignale</h3><p className="goal-score">Lernzielerfüllung: <b>{report.goalCompletionPercent}%</b>{report.languageSwitches > 0 && <> · Sprachwechsel: <b>{report.languageSwitches}</b></>}</p><p>{report.observedErrors.join(" · ") || "Keine belastbaren Fehler beobachtet."}</p>{report.observedStrengths.length > 0 && <p>Stärken: {report.observedStrengths.join(" · ")}</p>}<div className="tags">{report.focusTags.map((tag) => <span key={tag}>{tag}</span>)}</div><p>Nächster Schritt: {report.nextSessionSuggestions.join(" · ")}</p></div>}
+      </article>}
     </section>
 
     <section>
@@ -217,6 +249,42 @@ export function App() {
     {apiKeyDialog && <div className="modal-backdrop" role="presentation"><div className="api-key-modal" role="dialog" aria-modal="true" aria-labelledby="api-key-title"><button className="modal-close" aria-label="Dialog schließen" onClick={() => setApiKeyDialog(false)}>×</button><small>ANKI CONNECT-AUTHENTIFIZIERUNG</small><h2 id="api-key-title">Anki-API-Key angeben</h2><p>Anki Connect verlangt für diese Funktion einen gültigen API-Key. Du kannst ihn hier hinterlegen oder später in den Einstellungen ändern.</p><div className="settings-form"><label>Anki-Connect-Schlüssel<input autoFocus type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveApiKey()} placeholder="Anki-Connect-Key" autoComplete="off" /></label><div className="modal-actions"><button onClick={() => setApiKeyDialog(false)}>Später</button><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Speichern"}</button></div></div></div></div>}
     <footer><span>Langtut / Lernpaket-Player</span><span>{activePackage?.name} · Curriculum {curriculum?.version}</span></footer>
   </main>;
+}
+
+function PartnerMessage({ response }: { response: ActivityTurn }) {
+  return <div className="message-row partner-row"><small className="message-label">{response.roleLabel}</small><div className="message-bubble partner-bubble">{response.turn.message}</div></div>;
+}
+
+function TypingIndicator() {
+  return <div className="message-row partner-row typing-row" role="status" aria-live="polite">
+    <small className="message-label">Gesprächspartner schreibt</small>
+    <div className="message-bubble partner-bubble typing-bubble" aria-label="Antwort wird geschrieben"><span /><span /><span /></div>
+  </div>;
+}
+
+function LearnerMessage({ message, responses }: { message: string; responses: ActivityTurn[] }) {
+  const feedback = responses.map(({ turn }) => turn).find((turn) => turn.correction || turn.explanation || turn.targetLanguageUse !== "target" || turn.errorTags.length);
+  return <div className="message-row learner-row"><small className="message-label">Du</small><div className="message-bubble learner-bubble">{message}</div>{feedback && <div className="learner-feedback">{feedback.correction && <CorrectionDiff original={message} corrected={feedback.correction} />}{feedback.targetLanguageUse !== "target" && <p className="language-switch">{feedback.targetLanguageUse === "source" ? "Antwort in der Ausgangssprache erkannt." : "Sprachwechsel innerhalb der Antwort erkannt."} Für die Lernzielerfüllung wurde dieser Zug abgewertet.</p>}{feedback.explanation && <p className="feedback-explanation">{feedback.explanation}</p>}</div>}</div>;
+}
+
+function CorrectionDiff({ original, corrected }: { original: string; corrected: string }) {
+  const operations = wordDiff(original, corrected);
+  return <div className="correction-diff"><div aria-label={`Original: ${original}`}>{operations.filter(({ kind }) => kind !== "insert").map((operation, index) => operation.kind === "delete" ? <del key={index}>{operation.value}</del> : <span key={index}>{operation.value}</span>)}</div><div className="corrected-line" aria-label={`Korrektur: ${corrected}`}><small>KORREKTUR</small>{operations.filter(({ kind }) => kind !== "delete").map((operation, index) => operation.kind === "insert" ? <ins key={index}>{operation.value}</ins> : <span key={index}>{operation.value}</span>)}</div></div>;
+}
+
+type DiffOperation = { kind: "equal" | "delete" | "insert"; value: string };
+export function wordDiff(original: string, corrected: string): DiffOperation[] {
+  const tokenize = (value: string) => value.match(/\s+|[\p{L}\p{M}\d]+|[^\s]/gu) ?? [];
+  const before = tokenize(original); const after = tokenize(corrected);
+  const lengths = Array.from({ length: before.length + 1 }, () => Array(after.length + 1).fill(0));
+  for (let left = before.length - 1; left >= 0; left--) for (let right = after.length - 1; right >= 0; right--) lengths[left][right] = before[left] === after[right] ? lengths[left + 1][right + 1] + 1 : Math.max(lengths[left + 1][right], lengths[left][right + 1]);
+  const result: DiffOperation[] = []; let left = 0; let right = 0;
+  while (left < before.length || right < after.length) {
+    if (left < before.length && right < after.length && before[left] === after[right]) { result.push({ kind: "equal", value: before[left++] }); right++; }
+    else if (right < after.length && (left >= before.length || lengths[left][right + 1] > lengths[left + 1][right])) result.push({ kind: "insert", value: after[right++] });
+    else result.push({ kind: "delete", value: before[left++] });
+  }
+  return result;
 }
 
 function setupActionLabel(action: string) {

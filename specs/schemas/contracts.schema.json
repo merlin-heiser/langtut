@@ -150,23 +150,28 @@
     "TutorTurn": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["message", "correction", "explanation", "newExample", "errorTags"],
+      "required": ["message", "correction", "explanation", "newExample", "errorTags", "targetLanguageUse", "goalProgress", "conversationState"],
       "properties": {
         "message": { "type": "string" },
         "correction": { "type": "string" },
         "explanation": { "type": "string" },
         "newExample": { "type": "string" },
-        "errorTags": { "type": "array", "maxItems": 3, "items": { "type": "string" } }
+        "errorTags": { "type": "array", "maxItems": 3, "items": { "type": "string" } },
+        "targetLanguageUse": { "type": "string", "enum": ["target", "mixed", "source"] },
+        "goalProgress": { "type": "string", "enum": ["met", "partial", "not_met"] },
+        "conversationState": { "type": "string", "enum": ["continue", "closing", "completed"] }
       }
     },
     "TutorReport": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["focusTags", "observedErrors", "observedStrengths", "suggestedReviewItems", "suggestedNewCards", "nextSessionSuggestions"],
+      "required": ["focusTags", "observedErrors", "observedStrengths", "languageSwitches", "goalCompletionPercent", "suggestedReviewItems", "suggestedNewCards", "nextSessionSuggestions"],
       "properties": {
         "focusTags": { "type": "array", "items": { "type": "string" } },
         "observedErrors": { "type": "array", "items": { "type": "string" } },
         "observedStrengths": { "type": "array", "items": { "type": "string" } },
+        "languageSwitches": { "type": "integer", "minimum": 0 },
+        "goalCompletionPercent": { "type": "integer", "minimum": 0, "maximum": 100 },
         "suggestedReviewItems": { "type": "array", "items": { "type": "string" } },
         "suggestedNewCards": { "type": "array", "items": { "$ref": "#/definitions/CandidateItem" } },
         "nextSessionSuggestions": { "type": "array", "items": { "type": "string" } }

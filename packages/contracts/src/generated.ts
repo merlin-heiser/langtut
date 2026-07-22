@@ -132,11 +132,16 @@ export interface TutorTurn {
    * @maxItems 3
    */
   errorTags: string[];
+  targetLanguageUse: "target" | "mixed" | "source";
+  goalProgress: "met" | "partial" | "not_met";
+  conversationState: "continue" | "closing" | "completed";
 }
 export interface TutorReport {
   focusTags: string[];
   observedErrors: string[];
   observedStrengths: string[];
+  languageSwitches: number;
+  goalCompletionPercent: number;
   suggestedReviewItems: string[];
   suggestedNewCards: CandidateItem[];
   nextSessionSuggestions: string[];
