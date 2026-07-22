@@ -75,13 +75,26 @@ export class ContentPipeline {
     }
     if (importedVocab < preparationMinimum) throw new Error(`Vorbereitungsminimum nach ${batchesExecuted} Batches nicht erreicht; ${preparationMinimum - importedVocab} Einträge fehlen. Details: data/diagnostics/content-pipeline.jsonl`);
 
-    const missingFunctions = module.functions.filter((id) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "chunk", "functionId").includes(id));
-    const chunks = missingFunctions.length ? await this.generate(module, "chunk", missingFunctions.length, this.store.generationExclusions(this.pkg.manifest.id, module.id)) : [];
-    await this.verifyAndImport(module, chunks);
+    let uncoveredFunctions = module.functions.filter((id) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "chunk", "functionId").includes(id));
+    for (let attempt = 1; uncoveredFunctions.length && attempt <= 3; attempt++) {
+      const candidateCount = uncoveredFunctions.length === module.functions.length ? uncoveredFunctions.length : uncoveredFunctions.length + 2;
+      const chunks = await this.generate(module, "chunk", candidateCount, this.store.generationExclusions(this.pkg.manifest.id, module.id), uncoveredFunctions);
+      await this.verifyAndImport(module, chunks, uncoveredFunctions.length);
+      uncoveredFunctions = module.functions.filter((id) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "chunk", "functionId").includes(id));
+      this.store.updateJob(jobId, { progress: 0.8, message: `Chunk-Abdeckung: ${module.functions.length - uncoveredFunctions.length}/${module.functions.length}` });
+    }
+    if (uncoveredFunctions.length) throw new Error(`Kommunikative Funktionen nicht vollständig vorbereitet: ${uncoveredFunctions.join(", ")}`);
     this.store.updateJob(jobId, { progress: 0.85, message: "Chunks importiert" });
-    const missingMilestones = module.grammarMilestones.filter(({ id }) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "rule", "milestoneId").includes(id));
-    const rules = missingMilestones.length ? await this.generate(module, "rule", missingMilestones.length, this.store.generationExclusions(this.pkg.manifest.id, module.id)) : [];
-    await this.verifyAndImport(module, rules);
+    let uncoveredMilestones = module.grammarMilestones.filter(({ id }) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "rule", "milestoneId").includes(id));
+    for (let attempt = 1; uncoveredMilestones.length && attempt <= 3; attempt++) {
+      const ids = uncoveredMilestones.map(({ id }) => id);
+      const candidateCount = ids.length === module.grammarMilestones.length ? ids.length : ids.length + 2;
+      const rules = await this.generate(module, "rule", candidateCount, this.store.generationExclusions(this.pkg.manifest.id, module.id), ids);
+      await this.verifyAndImport(module, rules, ids.length);
+      uncoveredMilestones = module.grammarMilestones.filter(({ id }) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "rule", "milestoneId").includes(id));
+      this.store.updateJob(jobId, { progress: 0.9, message: `Regel-Abdeckung: ${module.grammarMilestones.length - uncoveredMilestones.length}/${module.grammarMilestones.length}` });
+    }
+    if (uncoveredMilestones.length) throw new Error(`Grammatik-Milestones nicht vollständig vorbereitet: ${uncoveredMilestones.map(({ id }) => id).join(", ")}`);
 
     const evidence = this.store.getEvidence(this.pkg.manifest.id, module.id);
     evidence.importedVocab = this.store.countItems(this.pkg.manifest.id, module.id, "vocab");
@@ -93,9 +106,9 @@ export class ContentPipeline {
     await this.log({ event: "job_completed", jobId, moduleId: module.id, importedVocab: evidence.importedVocab, importedFunctions: evidence.importedFunctions.length, importedMilestones: evidence.importedMilestones.length });
   }
 
-  private async generate(module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[]): Promise<CandidateItem[]> {
+  private async generate(module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[], requestedIds?: string[]): Promise<CandidateItem[]> {
     const taskId = kind === "vocab" ? "vocabulary_generation" : kind === "chunk" ? "chunk_generation" : "rule_generation";
-    const prompt = buildGenerationPrompt(this.pkg, module, kind, count, exclusions);
+    const prompt = buildGenerationPrompt(this.pkg, module, kind, count, exclusions, requestedIds);
     const result = await this.models.structured<GeneratedItems>(taskId, prompt, "GeneratedItems");
     return result.items.map(normalizeCandidateItem);
   }
@@ -207,13 +220,16 @@ function normalizeCandidateItem(item: CandidateItem): CandidateItem {
   };
 }
 
-export function buildGenerationPrompt(pkg: LoadedLearningPackage, module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[]): string {
+export function buildGenerationPrompt(pkg: LoadedLearningPackage, module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[], requestedIds?: string[]): string {
+  const requested = new Set(requestedIds ?? []);
+  const functions = requested.size ? module.functions.filter((id) => requested.has(id)) : module.functions;
+  const milestones = requested.size ? module.grammarMilestones.filter(({ id }) => requested.has(id)) : module.grammarMilestones;
   const roleInstruction = kind === "vocab"
     ? `Erzeuge lexikalischen Wortschatz aus diesen Domänen: ${module.vocabDomains.join(", ")}.
 Erzeuge keine sprachwissenschaftlichen Bezeichnungen (z. B. Kasus, Vokal, Betonung, Aspekt, Satzart), keine einzelnen Buchstaben oder Zeichen und keine einzelnen Formen eines Konjugations-/Deklinationsparadigmas. Verben stehen grundsätzlich im Infinitiv, Nomen in der Wörterbuchform und Adjektive in der Grundform. Funktionswörter wie čo, kde oder keď sind zulässig, wenn sie selbst kommunikativ gebraucht werden. Die deutsche Seite ist eine direkte lexikalische Übersetzung; der Beispielsatz zeigt Alltagsgebrauch und erklärt keine Sprachregel.`
     : kind === "chunk"
-      ? `Erzeuge feste, direkt verwendbare Wendungen, die genau diese kommunikativen Funktionen realisieren: ${module.functions.join(", ")}. Erzeuge keine bloßen Namen der Funktionen und keine Grammatikterminologie.`
-      : `Erzeuge je Grammatik-Milestone eine verständliche Regel-/Abrufnote für diese Ziele: ${module.grammarMilestones.map((m) => `${m.id}: ${m.description}`).join(" | ")}. Hier ist notwendige Metasprache erlaubt, sofern sie knapp erklärt und an konkreten Beispielen gezeigt wird.`;
+      ? `Erzeuge feste, direkt verwendbare Wendungen, die genau diese kommunikativen Funktionen realisieren: ${functions.join(", ")}. Erzeuge keine bloßen Namen der Funktionen und keine Grammatikterminologie.`
+      : `Erzeuge je Grammatik-Milestone eine verständliche Regel-/Abrufnote für diese Ziele: ${milestones.map((m) => `${m.id}: ${m.description}`).join(" | ")}. Hier ist notwendige Metasprache erlaubt, sofern sie knapp erklärt und an konkreten Beispielen gezeigt wird.`;
   const taskId = kind === "vocab" ? "vocabulary_generation" : kind === "chunk" ? "chunk_generation" : "rule_generation";
   return `${renderPackagePrompt(pkg.prompts[taskId], pkg)}
 Erzeuge exakt ${count} ${kind}-Lernobjekte für ${pkg.manifest.targetLanguage.name} (Erklärungssprache ${pkg.manifest.sourceLanguage.name}).

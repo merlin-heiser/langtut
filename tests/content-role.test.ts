@@ -33,6 +33,16 @@ describe("learning-role separation", () => {
     expect(validateLearningRole(vocab(slovak, german))).toContain("vocab_is_metalanguage");
   });
 
+  it("targets only missing chunk coverage during continuation", async () => {
+    const pkg = await loadLearningPackage(`${process.cwd()}/learning-packages/${DEFAULT_PACKAGE_ID}`, process.cwd());
+    const module = pkg.curriculum.modules[0];
+    const missing = module.functions[module.functions.length - 1];
+    const prompt = buildGenerationPrompt(pkg, module, "chunk", 1, [], [missing]);
+    const coverageLine = prompt.split("\n").find((line) => line.includes("Funktionen realisieren:"));
+    expect(coverageLine).toContain(`Funktionen realisieren: ${missing}`);
+    for (const covered of module.functions.slice(0, -1)) expect(coverageLine).not.toContain(covered);
+  });
+
   it("rejects alphabet symbols and isolated paradigm cells", () => {
     expect(validateLearningRole(vocab("Á", "langes A"))).toContain("vocab_is_symbol_not_lexeme");
     expect(validateLearningRole(vocab("som", "ich bin", "1. Person Singular von byť"))).toContain("vocab_is_inflection_cell");
