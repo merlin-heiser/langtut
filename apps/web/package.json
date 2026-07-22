@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:android": "tsc -b && vite build --mode android",
     "preview": "vite preview"
   },
   "dependencies": {
     "@langtut/contracts": "0.1.0",
+    "@langtut/runtime": "0.1.0",
     "react": "latest",
     "react-dom": "latest"
   },

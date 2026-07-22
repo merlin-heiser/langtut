@@ -71,6 +71,7 @@ class SeedAnki implements AnkiGateway {
   async applySetup(): Promise<SetupPreview> { return this.setupPreview(); }
   async addItems(items: CandidateItem[]): Promise<Array<number | null>> { this.items.push(...items); return items.map((_, index) => this.items.length + index + 1); }
   async removeNotes(): Promise<void> {}
+  async syncModuleAvailability(): Promise<void> {}
 }
 class SeedModels implements ModelGateway {
   requestedVocab: number[] = [];

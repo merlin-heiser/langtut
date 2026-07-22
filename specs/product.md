@@ -25,10 +25,20 @@ führen zu Recovery, niemals zu einer Rückstufung.
 
 ## Plattform
 
-Windows ist die vollständige lokale Referenzlaufzeit. Ein Android-Capacitor-Artefakt
-existiert für Geräte-Deployment. Bis die lokale Android-Lernruntime fertig ist, nutzt
-die bestehende Android-Oberfläche weiterhin eine explizit konfigurierte API; sie darf
-nicht als autonomer Offline-Client beschrieben werden.
+Windows und Android sind gleichrangige lokale Laufzeiten. Beide verwenden denselben
+plattformneutralen Anwendungskern für Pakete, Placement, Planung, Progression,
+Inhaltserzeugung, Tutor-Sessions, Lexikon und Drive-Synchronisation. Fastify ist nur
+der lokale HTTP-Adapter der Windows-Web-App; Android führt den Anwendungskern direkt
+im gebündelten Capacitor-Artefakt aus und benötigt keine Langtut-API.
+
+Plattformspezifisch bleiben ausschließlich Persistenz, Dateiauswahl, OAuth und Tokens,
+Provider-Transport sowie die Anki-Anbindung. Windows verwendet SQLite und AnkiConnect,
+Android IndexedDB und die AnkiDroid-API. Funktionale Regeln dürfen nicht in einem
+dieser Adapter dupliziert werden.
+
+Android darf für den Lernbetrieb direkt von AnkiDroid, Google Drive und den bewusst
+konfigurierten LLM-Diensten abhängen. Eine lokale maschinelle Übersetzung ist eine
+optionale Runtime-Fähigkeit und keine Voraussetzung für einen autonomen Client.
 
 Google-OAuth-JSON-Dateien dürfen auf Windows und Android importiert werden. Die
 Oberfläche extrahiert die Client-ID und, falls für den Desktop-Token-Tausch nötig, das
@@ -44,4 +54,4 @@ fehlender app-eigener Anki-Modelle. Fremde gleichnamige Modelle bleiben geschüt
 - kein automatischer Modulstatus durch ein LLM
 - kein stiller Provider-Fallback
 - keine Änderung fremder Anki-Modelle
-- kein als autonom deklarierter Android-Client vor lokaler Android-Lernruntime
+- kein Android-Zugriff auf eine Windows-, Fastify- oder sonstige Langtut-Serverlaufzeit

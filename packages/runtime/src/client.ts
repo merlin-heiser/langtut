@@ -1,0 +1,55 @@
+import type { Curriculum, Job, LexiconLookupRequest, LexiconLookupResult, LexiconStagingRequest, SessionPlan } from "@langtut/contracts";
+
+export type RuntimeStatus = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
+export type SetupPreview = { deck: { name: string; action: string }; models: Array<{ name: string; action: string; managed: boolean; fields: string[]; changes?: string[]; templates?: Record<string, unknown>; css?: string }> };
+export type PlacementView = { id: string; status: string; itemsAnswered: number; maxItems: number; recommendedModuleId?: string; weakTags: string[]; nextItem?: { id: string; prompt: string; level: string; kind: string; choices?: string[] } };
+export type TutorTurnView = { message: string; correction: string; explanation: string; newExample: string; errorTags: string[]; targetLanguageUse: "target" | "mixed" | "source"; goalProgress: "met" | "partial" | "not_met"; conversationState: "continue" | "closing" | "completed" };
+export type TutorReportView = { focusTags: string[]; observedErrors: string[]; observedStrengths: string[]; languageSwitches: number; goalCompletionPercent: number; suggestedReviewItems: string[]; suggestedNewCards?: import("@langtut/contracts").CandidateItem[]; nextSessionSuggestions: string[] };
+export type ApiCostSummary = { currency: "USD"; weekCost: number; totalCost: number; weekInputTokens: number; weekOutputTokens: number; totalInputTokens: number; totalOutputTokens: number; weekStartedAt: string; trackedSince: string | null; pricingVersion: string };
+export type LocalMtModelStatus = { key: string; family: string; modelId: string; revision: string; license: string; sizeBytes: number; sourceLanguages: string[]; targetLanguages: string[]; priority: number; status: string; error?: string };
+export type LocalMtSettings = { enabled: boolean; cloudFallback: boolean; status?: { runtime?: { available: boolean; error?: string }; models?: LocalMtModelStatus[] } };
+export type SyncStatus = { configured: boolean; connected: boolean; pendingEvents: number; lastSyncAt?: string; error?: string; googleOAuthClientId?: string };
+export type RuntimeSettings = { anki: { configured: boolean; mode?: "anki-connect" | "ankidroid" }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } }; localMt: LocalMtSettings; sync?: SyncStatus };
+export type LearningPackageView = { id: string; version: string; name: string; targetLanguage: { code: string; name: string }; sourceLanguage: { code: string; name: string }; active: boolean; modules: number; progress: { started: number; completed: number; total: number }; capabilities: { placement: boolean; nativeVocabulary: boolean; customPrompts: boolean; activities: boolean } };
+export type PackageShelf = { activePackageId: string; packages: LearningPackageView[] };
+export type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; attemptedMilestoneIds: string[] }> };
+export type ActivityView = { id: string; title: string; description?: string; type?: "roleplay"; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number };
+export type ActivityTurnView = { roleId: string; roleLabel: string; turn: TutorTurnView };
+export type TutorSessionView = { id: string; status: string; moduleId?: string; activity?: ActivityView; initialTurns?: ActivityTurnView[] };
+export type ActivityTurnResult = { turns: ActivityTurnView[]; completed: boolean; report?: TutorReportView };
+
+export interface LangtutClient {
+  status(): Promise<RuntimeStatus>;
+  costs(): Promise<ApiCostSummary>;
+  curriculum(): Promise<Curriculum>;
+  moduleProgress(): Promise<ModuleProgress>;
+  latestPlacement(): Promise<PlacementView | null>;
+  latestJob(): Promise<Job | null>;
+  job(id: string): Promise<Job>;
+  settings(): Promise<RuntimeSettings>;
+  packages(): Promise<PackageShelf>;
+  activities(): Promise<{ activities: ActivityView[] }>;
+  startPlacement(): Promise<PlacementView>;
+  answerPlacement(id: string, itemId: string, answer: string): Promise<PlacementView>;
+  overridePlacement(id: string, moduleId: string): Promise<PlacementView>;
+  prepareModule(moduleId: string): Promise<Job>;
+  createSessionPlan(): Promise<SessionPlan>;
+  startSession(input: { planId?: string; moduleId?: string; activityId?: string }): Promise<TutorSessionView>;
+  activityTurn(id: string, message: string): Promise<ActivityTurnResult>;
+  recordMilestone(moduleId: string, milestoneId: string): Promise<unknown>;
+  saveAnkiKey(apiKey: string): Promise<unknown>;
+  saveProviderKey(provider: "openai" | "gemini", apiKey: string): Promise<unknown>;
+  saveModels(selection: RuntimeSettings["models"]["selection"]): Promise<Pick<RuntimeSettings, "models">>;
+  saveLocalMt(settings: Pick<LocalMtSettings, "enabled" | "cloudFallback">): Promise<{ localMt: LocalMtSettings }>;
+  installLocalMt(key: string): Promise<{ localMt: LocalMtSettings }>;
+  syncNow(): Promise<SyncStatus>;
+  configureGoogle(input: { clientId: string; clientSecret?: string }): Promise<unknown>;
+  acceptGoogleToken(accessToken: string): Promise<SyncStatus>;
+  authorizeGoogle(): Promise<never>;
+  activatePackage(id: string): Promise<unknown>;
+  importPackage(file: Blob): Promise<unknown>;
+  previewAnkiSetup(): Promise<SetupPreview>;
+  applyAnkiSetup(): Promise<SetupPreview>;
+  lookupLexicon(input: LexiconLookupRequest): Promise<LexiconLookupResult>;
+  stageLexicon(input: LexiconStagingRequest): Promise<unknown>;
+}

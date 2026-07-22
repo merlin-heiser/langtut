@@ -22,6 +22,7 @@ class FakeAnkiGateway implements AnkiGateway {
   async applySetup(): Promise<SetupPreview> { this.setupApplications++; return this.setupPreview(); }
   async addItems(items: CandidateItem[]): Promise<Array<number | null>> { this.notes.push(...items); return items.map((_, index) => this.notes.length + index + 1); }
   async removeNotes(noteIds: number[]): Promise<void> { this.removedNoteIds.push(...noteIds); }
+  async syncModuleAvailability(): Promise<void> {}
 }
 
 class FakeModels implements ModelGateway {

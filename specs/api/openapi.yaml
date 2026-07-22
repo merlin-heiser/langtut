@@ -49,6 +49,51 @@ paths:
       operationId: getStatus
       responses:
         '200': { description: Systemstatus }
+  /settings:
+    get:
+      operationId: getSettings
+      responses:
+        '200': { description: Lokale Runtime-Einstellungen und Fähigkeiten }
+  /settings/models:
+    post:
+      operationId: configureModels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { openai: { type: string }, gemini: { type: string } }
+      responses:
+        '200': { description: Modellauswahl lokal gespeichert }
+  /settings/providers/{provider}/key:
+    post:
+      operationId: configureProviderKey
+      parameters:
+        - { name: provider, in: path, required: true, schema: { enum: [openai, gemini] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties: { apiKey: { type: string, minLength: 1 } }
+      responses:
+        '200': { description: Schlüssel ausschließlich im lokalen Credential-Adapter gespeichert }
+  /settings/anki-api-key:
+    post:
+      operationId: configureAnkiConnectKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties: { apiKey: { type: string, minLength: 1 } }
+      responses:
+        '200': { description: AnkiConnect-Schlüssel auf Windows lokal gespeichert }
   /settings/local-mt:
     post:
       operationId: configureLocalMachineTranslation
@@ -94,6 +139,11 @@ paths:
       operationId: getNextModule
       responses:
         '200': { description: Nächstes verfügbares Modul }
+  /modules/progress:
+    get:
+      operationId: getModuleProgress
+      responses:
+        '200': { description: Vorbereitungs- und Milestone-Evidenz pro Modul }
   /session-plans:
     post:
       operationId: createSessionPlan

@@ -8,3 +8,5 @@
 6. Das Modul wechselt danach automatisch zu `learning`, ohne Mastery oder Fehlerfreiheit vorauszusetzen.
 7. Nachfolgemodule werden aus stabilen Voraussetzungen deterministisch freigeschaltet.
 8. Spätere Schwächen erzeugen `RECOVERY`-Aktivitäten, ohne bestehende Modulzustände zurückzustufen.
+9. Das Android-Artefakt führt alle Lernrouten lokal aus und enthält keine Abhängigkeit von einer Langtut-Backend-URL.
+10. Windows-HTTP-Client und Android-In-Process-Client erfüllen denselben beobachtbaren Runtime-Vertrag.

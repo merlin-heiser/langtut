@@ -31,7 +31,9 @@ Standard angeboten.
 Gewichte werden erst nach ausdrücklicher Installation in den Einstellungen unterhalb
 des lokalen Datenverzeichnisses geladen. Der separate Python-JSONL-Worker benötigt
 `transformers`, `torch`, `sentencepiece` und `huggingface_hub`; ein anderer Interpreter
-kann über `LANGTUT_PYTHON` gewählt werden.
+kann über `LANGTUT_PYTHON` gewählt werden. Der `probe`-Befehl prüft diese Abhängigkeiten
+ohne die schweren ML-Module zu importieren und muss als schneller, nebenwirkungsfreier
+Start-Check innerhalb des API-Timeouts antworten.
 
 Lokale MT legt niemals selbst einen Wortsinn fest. Sie wird nur bei einem eindeutigen
 Katalogsinn verwendet und mit Status `pending_verification`, Provider, Modellrevision,

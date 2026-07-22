@@ -7,18 +7,19 @@ export interface DriveSyncStatus { configured: boolean; connected: boolean; pend
 /** A deliberately small Drive REST adapter. It uses appDataFolder only, so Langtut files stay hidden from the user's Drive. */
 export class GoogleDriveSync {
   private readonly drive: GoogleDriveAppDataClient;
-  constructor(private readonly store: Store) { this.drive = new GoogleDriveAppDataClient(() => this.token()); }
+  constructor(private readonly store: Store, private readonly refreshAccessToken?: () => Promise<string | undefined>) { this.drive = new GoogleDriveAppDataClient(() => this.token()); }
   private token(): string | undefined { return this.store.getSetting<string>("google_drive.access_token"); }
   status(): DriveSyncStatus {
     const configured = Boolean(this.token());
     return { configured, connected: configured && !this.store.getSetting<string>("google_drive.last_error"), pendingEvents: this.store.pendingSyncEvents().length, lastSyncAt: this.store.getSetting<string>("google_drive.last_sync_at"), error: this.store.getSetting<string>("google_drive.last_error") };
   }
-  configureAccessToken(accessToken: string): void {
+  configureAccessToken(accessToken: string, refreshToken?: string): void {
     this.store.setSetting("google_drive.access_token", accessToken);
+    if (refreshToken) this.store.setSetting("google_drive.refresh_token", refreshToken);
     this.store.deleteSetting("google_drive.last_error");
   }
   disconnect(): void {
-    this.store.deleteSetting("google_drive.access_token"); this.store.deleteSetting("google_drive.last_error"); this.store.deleteSetting("google_drive.last_sync_at");
+    this.store.deleteSetting("google_drive.access_token"); this.store.deleteSetting("google_drive.refresh_token"); this.store.deleteSetting("google_drive.last_error"); this.store.deleteSetting("google_drive.last_sync_at");
   }
   private async uploadSegment(events: SyncEventV1[]): Promise<void> {
     if (!events.length) return;
@@ -36,7 +37,7 @@ export class GoogleDriveSync {
       this.store.markTranscriptDeleted(sessionId); return await this.sync();
     } catch (error) { const message = error instanceof Error ? error.message : String(error); this.store.setSetting("google_drive.last_error", message); return this.status(); }
   }
-  async sync(): Promise<DriveSyncStatus> {
+  async sync(retried = false): Promise<DriveSyncStatus> {
     try {
       const outgoing = this.store.pendingSyncEvents();
       // A segment is immutable. Retrying after an interrupted request is safe because event IDs are deduplicated on download.
@@ -53,6 +54,10 @@ export class GoogleDriveSync {
       return this.status();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error); this.store.setSetting("google_drive.last_error", message);
+      if (!retried && /Google Drive:\s*401\b/.test(message) && this.refreshAccessToken) {
+        const accessToken = await this.refreshAccessToken();
+        if (accessToken) return this.sync(true);
+      }
       return this.status();
     }
   }

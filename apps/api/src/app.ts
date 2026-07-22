@@ -17,9 +17,11 @@ import { Store } from "./database.js";
 import { GoogleDriveSync } from "./drive-sync.js";
 import { LexiconService } from "./lexicon.js";
 import { LocalMtClient, type LocalMtGateway } from "./local-mt.js";
-import { newPlacement, recommendation, scoreAnswer } from "./placement.js";
+import { newPlacement, placementShouldComplete, recommendation, scoreAnswer } from "./placement.js";
 import { ModelRouter, modelChoices, type ModelGateway } from "./providers.js";
 import { aggregateErrorTags, aggregateLearningSignals, buildLearnerContext, readRapport, transcriptFromEvents, writeRapportAtomic } from "./rapport.js";
+import { emptyTutorTurn, normalizeTutorTurn, rolesAfterLearner, rolesBeforeLearner } from "@langtut/runtime";
+export { normalizeTutorTurn, rolesAfterLearner, rolesBeforeLearner } from "@langtut/runtime";
 
 type PlacementState = ReturnType<typeof newPlacement> & { packageId: string; answers: Array<{ itemId: string; correct: boolean }>; recommendedModuleId?: string };
 type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
@@ -28,7 +30,21 @@ type ActivityOutcome = { turns: ActivityTurn[]; shouldComplete: boolean };
 export async function buildApp(root = process.cwd(), overrides: { models?: ModelGateway; anki?: AnkiGateway; localMt?: LocalMtGateway } = {}) {
   const config = await loadConfig(root);
   const store = await Store.open(config.dbPath, root);
-  const driveSync = new GoogleDriveSync(store);
+  const refreshGoogleToken = async () => {
+    const refreshToken = store.getSetting<string>("google_drive.refresh_token");
+    const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
+    const clientSecret = store.getSetting<string>("google_drive.oauth_client_secret") ?? config.googleOAuthClientSecret;
+    if (!refreshToken || !clientId) return undefined;
+    const form = new URLSearchParams({ refresh_token: refreshToken, client_id: clientId, grant_type: "refresh_token" });
+    if (clientSecret) form.set("client_secret", clientSecret);
+    const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form });
+    const token = await response.json() as { access_token?: string };
+    if (!response.ok || !token.access_token) return undefined;
+    store.setSetting("google_drive.access_token", token.access_token);
+    store.deleteSetting("google_drive.last_error");
+    return token.access_token;
+  };
+  const driveSync = new GoogleDriveSync(store, refreshGoogleToken);
   // Jobs run in-process. After a restart there is no worker that can resume them,
   // so leaving them running would permanently block a new preparation.
   store.failInterruptedJobs();
@@ -40,6 +56,9 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   const models = overrides.models ?? await ModelRouter.load(root, config.modelTasksPath, (event) => store.recordApiUsage(event));
   const savedModelSelection = store.getSetting<{ openai: string; gemini: string }>("models.selection");
   if (savedModelSelection && models instanceof ModelRouter) models.setModelSelection(savedModelSelection);
+  if (models instanceof ModelRouter) for (const provider of ["openai", "gemini"] as const) {
+    const key = store.getSetting<string>(`provider.${provider}.api_key`); if (key) models.configure(provider, key);
+  }
   const anki = overrides.anki ?? new AnkiClient(config.anki.url, config.anki.deck, config.anki.key);
   const dataRoot = path.dirname(config.dbPath);
   const localMtSettings = store.getSetting<{ enabled: boolean; cloudFallback: boolean }>("local_mt.settings") ?? { enabled: false, cloudFallback: true };
@@ -72,6 +91,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const base = applyProgress(pkg.curriculum, store.getProgress(pkg.manifest.id));
     const progress = recomputeLocks(base, store.getProgress(pkg.manifest.id));
     for (const module of base.modules) store.setStatus(pkg.manifest.id, module.id, progress[module.id]);
+    await anki.syncModuleAvailability(pkg.manifest.id, Object.entries(progress).filter(([, status]) => status === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
     return applyProgress(pkg.curriculum, progress);
   }
   function pipeline() { return new ContentPipeline(store, anki, models, active(), path.join(path.dirname(config.dbPath), "diagnostics", `${activePackageId}.jsonl`), localMt); }
@@ -114,7 +134,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   });
   app.get("/api/v1/costs/summary", async () => store.getApiCostSummary(new Date(), models.pricingVersion?.() ?? "untracked"));
   app.get("/api/v1/settings", async () => ({
-    anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key) },
+    anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key), mode: "anki-connect" },
     models: { selection: models instanceof ModelRouter ? models.modelSelection() : undefined, choices: modelChoices },
     localMt: { ...(localMt.settings?.() ?? localMtSettings), status: await localMt.status?.() },
     sync: { ...driveSync.status(), googleOAuthClientId: store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId },
@@ -146,10 +166,10 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const form = new URLSearchParams({ code: request.query.code, client_id: clientId!, redirect_uri: pending.redirectUri, grant_type: "authorization_code", code_verifier: pending.verifier });
     if (clientSecret) form.set("client_secret", clientSecret);
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form });
-    const token = await tokenResponse.json() as { access_token?: string; error?: string; error_description?: string };
+    const token = await tokenResponse.json() as { access_token?: string; refresh_token?: string; error?: string; error_description?: string };
     store.deleteSetting("google_drive.oauth_pending");
     if (!tokenResponse.ok || !token.access_token) return reply.code(400).type("text/html").send(`<h1>Google-Anmeldung fehlgeschlagen</h1><p>${escapeHtml(token.error_description ?? token.error ?? "Unbekannter Fehler")}</p>`);
-    driveSync.configureAccessToken(token.access_token); const result = await driveSync.sync();
+    driveSync.configureAccessToken(token.access_token, token.refresh_token); const result = await driveSync.sync();
     return reply.type("text/html").send(result.error ? `<h1>Google verbunden, Sync fehlgeschlagen</h1><p>${escapeHtml(result.error)}</p>` : "<h1>Google Drive verbunden</h1><p>Du kannst dieses Fenster schließen und zu Langtut zurückkehren.</p>");
   });
   // Native clients can also obtain OAuth tokens through their own system-browser flow.
@@ -194,6 +214,13 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (!validation.reachable) { anki.configureKey(previous); return reply.code(400).send({ error: `anki_api_key_rejected: ${validation.error ?? "AnkiConnect nicht erreichbar"}` }); }
     store.setSetting("anki.connect_api_key", apiKey); return { anki: { configured: true } };
   });
+  app.post<{ Params: { provider: "openai" | "gemini" }; Body: { apiKey?: string } }>("/api/v1/settings/providers/:provider/key", async (request, reply) => {
+    const provider = request.params.provider; const apiKey = request.body?.apiKey?.trim();
+    if (!apiKey || !["openai", "gemini"].includes(provider)) return reply.code(400).send({ error: "provider_api_key_required" });
+    if (!(models instanceof ModelRouter)) return reply.code(409).send({ error: "runtime_model_configuration_unavailable" });
+    models.configure(provider, apiKey); store.setSetting(`provider.${provider}.api_key`, apiKey);
+    return { provider, configured: true };
+  });
 
   app.get("/api/v1/curriculum", async () => refreshCurriculum());
   app.get("/api/v1/modules/progress", async () => {
@@ -229,6 +256,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     evidence.attemptedMilestones = [...new Set([...evidence.attemptedMilestones, request.params.milestoneId])];
     const status = deriveModuleStatus(module.status, module, evidence);
     store.saveEvidence(activePackageId, module.id, evidence, status);
+    await anki.syncModuleAvailability(activePackageId, Object.entries(store.getProgress(activePackageId)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
     return { packageId: activePackageId, moduleId: module.id, status, evidence };
   });
 
@@ -284,9 +312,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     } else correct = scoreAnswer(item, request.body.answer, pkg.manifest.targetLanguage.code);
     placement.answers.push({ itemId: item.id, correct }); placement.itemsAnswered = placement.answers.length; placement.score = placement.answers.filter((answer) => answer.correct).length;
     if (!correct) placement.weakTags = [...new Set([...placement.weakTags, item.tag, ...(rubric?.weakTags ?? [])])];
-    const stableHigh = placement.itemsAnswered >= 9 && placement.score / placement.itemsAnswered >= 0.78;
-    const stableLow = placement.itemsAnswered >= 6 && placement.score / placement.itemsAnswered <= 0.34;
-    const complete = stableHigh || stableLow || (Date.now() - Date.parse(placement.startedAt)) / 60_000 >= 15 || placement.itemsAnswered >= items.length || placement.itemsAnswered >= placement.maxItems;
+    const complete = placementShouldComplete(placement, items.length);
     if (complete) { placement.status = "completed"; placement.recommendedModuleId = recommendation(placement.score, placement.itemsAnswered, (await refreshCurriculum()).modules); await applyPlacementStart(placement.recommendedModuleId); }
     store.savePlacement(placement);
     return { ...publicPlacement(placement), correct, rubric, ...(!complete && items[placement.itemsAnswered] ? { nextItem: publicPlacementItem(items[placement.itemsAnswered]) } : {}) };
@@ -430,26 +456,9 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
 }
 
 function fallbackActivity(): LearningActivity { return { id: "conversation", title: "Konversation", roles: [{ id: "learner", label: "Lernender", controller: "learner" }, { id: "tutor", label: "Tutor", controller: "llm", prompt: "tutor_conversation" }], turnOrder: ["learner", "tutor"], rounds: 8 }; }
-export function rolesBeforeLearner(activity: LearningActivity): string[] { const learnerIndex = activity.turnOrder.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); return learnerIndex < 0 ? [] : activity.turnOrder.slice(0, learnerIndex); }
-export function rolesAfterLearner(activity: LearningActivity): string[] { const learnerIndex = activity.turnOrder.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); const rotated = [...activity.turnOrder.slice(learnerIndex + 1), ...activity.turnOrder.slice(0, learnerIndex)]; const nextLearner = rotated.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); return nextLearner < 0 ? rotated : rotated.slice(0, nextLearner); }
 function publicPlacement(placement: PlacementState) { return { id: placement.id, packageId: placement.packageId, status: placement.status, startedAt: placement.startedAt, itemsAnswered: placement.itemsAnswered, maxItems: placement.maxItems, recommendedModuleId: placement.recommendedModuleId, weakTags: placement.weakTags }; }
 function publicPlacementItem(item: PlacementItemDefinition) { return { id: item.id, level: item.level, prompt: item.prompt, kind: item.kind ?? "production", choices: item.choices }; }
 function publicPlacementWithNext(placement: PlacementState, items: PlacementItemDefinition[]) { return { ...publicPlacement(placement), ...(placement.status === "active" && items[placement.itemsAnswered] ? { nextItem: publicPlacementItem(items[placement.itemsAnswered]) } : {}) }; }
 
-export function normalizeTutorTurn(turn: TutorTurn, sourceLanguageName = "Deutsch"): TutorTurn {
-  const plain = (value: string) => value.replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
-  let message = plain(turn.message); let explanation = plain(turn.explanation);
-  const translated = message.match(new RegExp(`\\s*${escapeRegExp(sourceLanguageName)}:\\s*(.+)$`, "i"));
-  if (translated?.index !== undefined) { message = message.slice(0, translated.index).trim(); explanation = [plain(translated[1]), explanation].filter(Boolean).join(" "); }
-  return {
-    message, correction: plain(turn.correction), explanation, newExample: plain(turn.newExample),
-    errorTags: [...new Set((turn.errorTags ?? []).map(plain).filter(Boolean))].slice(0, 3),
-    targetLanguageUse: turn.targetLanguageUse ?? "target",
-    goalProgress: turn.goalProgress ?? "partial",
-    conversationState: turn.conversationState ?? "continue",
-  };
-}
-function emptyTutorTurn(): TutorTurn { return { message: "", correction: "", explanation: "", newExample: "", errorTags: [], targetLanguageUse: "target", goalProgress: "partial", conversationState: "continue" }; }
 function fallbackTutorReport(focusTags: string[], errorCounts: Record<string, number>, signals: { languageSwitches: number; goalCompletionPercent: number }): TutorReport { return { focusTags, observedErrors: Object.entries(errorCounts).map(([tag, count]) => `${tag} (${count})`), observedStrengths: [], languageSwitches: signals.languageSwitches, goalCompletionPercent: signals.goalCompletionPercent, suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: [] }; }
-function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }

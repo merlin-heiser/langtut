@@ -15,6 +15,15 @@ gleichnamiges Modell ohne Sentinel ist ein Konflikt und bleibt unverändert.
 Ein zweites Setup erzeugt keinen Diff. Vokabel- und Chunk-Modelle enthalten zwei
 Templates, damit beide Richtungen als getrennte Anki-Karten terminiert werden.
 
+## Szenario: systemgesteuerte Kartenfreigabe
+
+Neue Langtut-Karten werden standardmäßig ausgesetzt. Eine Karte darf nur dann
+sichtbar bzw. lernbar sein, wenn ihr Modul den Domain-Status `learning` besitzt;
+Karten aus `locked`, `available`, `preparing` und `credited`-Modulen bleiben
+ausgesetzt. Diese Regel gilt für Vokabel-, Chunk- und Regelkarten gleichermaßen
+und wird bei jedem Curriculum-Abgleich auch auf bereits importierte Langtut-
+Karten angewendet. Fremde Karten und Modelle werden nicht verändert.
+
 ## Szenario: automatische Einrichtung bei Modulvorbereitung
 
 „Modul vorbereiten“ ist die explizite Autorisierung für Providerkosten und

@@ -11,4 +11,4 @@ androidapp:
 	@pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/android-app.ps1
 
 androidapp-run:
-	@pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/android-app.ps1 -StartApi
+	@pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/android-app.ps1

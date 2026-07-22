@@ -13,7 +13,7 @@
     "dev": "concurrently -n api,web -c cyan,magenta \"npm --prefix apps/api run dev\" \"node scripts/start-web-when-api-ready.mjs\"",
     "prebuild": "node scripts/link-local-workspaces.mjs",
     "build": "npm run generate && npm run build --workspaces --if-present",
-    "build:android": "npm run build",
+    "build:android": "node scripts/assert-android-standalone.mjs && npm run build && npm --prefix apps/web run build:android && node scripts/assert-android-artifact.mjs",
     "android:sync": "npm run build:android && npx cap sync android",
     "android:open": "npx cap open android",
     "android:debug": "npm run android:sync && cd android && gradlew.bat assembleDebug",

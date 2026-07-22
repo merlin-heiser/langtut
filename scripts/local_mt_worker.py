@@ -3,6 +3,7 @@
 
 import argparse
 import gc
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -16,6 +17,14 @@ def dependencies():
         return torch, snapshot_download, AutoModelForSeq2SeqLM, AutoTokenizer
     except Exception as exc:
         raise RuntimeError("Installiere Python-Pakete: transformers torch sentencepiece huggingface_hub") from exc
+
+
+def probe_dependencies():
+    """Check dependency presence without importing heavyweight ML runtimes."""
+    required = ("torch", "transformers", "sentencepiece", "huggingface_hub")
+    missing = [name for name in required if importlib.util.find_spec(name) is None]
+    if missing:
+        raise RuntimeError(f"Fehlende Python-Pakete: {', '.join(missing)}")
 
 
 def emit(value):
@@ -80,7 +89,7 @@ def main():
     args = parser.parse_args()
     if args.command == "probe":
         try:
-            dependencies()
+            probe_dependencies()
             emit({"ok": True})
         except Exception as exc:
             emit({"ok": False, "error": str(exc)})

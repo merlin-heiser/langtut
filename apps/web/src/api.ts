@@ -1,23 +1,11 @@
-type CapacitorWindow = Window & { Capacitor?: { isNativePlatform?: () => boolean } };
+import type { LangtutClient } from "@langtut/runtime";
 
-const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "");
-const nativeApp = typeof window !== "undefined" && Boolean((window as CapacitorWindow).Capacitor?.isNativePlatform?.());
-// The desktop dev server proxies this relative path. A native build must name its
-// HTTPS backend explicitly; otherwise it would accidentally call the WebView host.
-export const API_BASE = configuredApiBase ?? (nativeApp ? "" : "/api/v1");
+const nativeBundle = import.meta.env.VITE_LANGTUT_NATIVE === "true";
+let selected: Promise<LangtutClient> | undefined;
+const selectedClient = () => selected ??= nativeBundle
+  ? import("./android-runtime.js").then(({ createAndroidClient }) => createAndroidClient())
+  : import("./http-client.js").then(({ httpClient }) => httpClient);
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!API_BASE) throw new Error("Diese Android-App benötigt eine konfigurierte HTTPS-API (VITE_API_BASE_URL).");
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...(!(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...init?.headers } });
-  const raw = await response.text();
-  let body: Record<string, unknown> | undefined;
-  if (raw.trim()) {
-    try { body = JSON.parse(raw) as Record<string, unknown>; }
-    catch { throw new Error(`Ungültige Serverantwort (${response.status})`); }
-  }
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${response.status}`);
-  return body as T;
-}
-
-export const post = <T>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
-export const uploadPackage = <T>(file: File) => { const body = new FormData(); body.append("file", file); return api<T>("/packages/import", { method: "POST", body }); };
+export const client = new Proxy({} as LangtutClient, {
+  get: (_target, property: keyof LangtutClient) => (...args: unknown[]) => selectedClient().then((value) => (value[property] as (...values: unknown[]) => unknown).apply(value, args)),
+});

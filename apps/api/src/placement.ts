@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { CurriculumModule, ModuleStatus } from "@langtut/contracts";
 import type { PlacementItemDefinition } from "@langtut/domain";
+import { placementShouldComplete, recommendPlacement, scorePlacementAnswer } from "@langtut/runtime";
+export { placementShouldComplete } from "@langtut/runtime";
 
 export type PlacementItem = PlacementItemDefinition;
 
@@ -34,14 +36,11 @@ export function newPlacement(): PlacementStateBase {
 }
 
 export function scoreAnswer(item: PlacementItem, answer: string, locale?: string): boolean {
-  const normalized = answer.normalize("NFC").toLocaleLowerCase(locale).replace(/[.!?]/g, "").trim();
-  return item.expected.some((expected) => normalized.includes(expected));
+  return scorePlacementAnswer(item.expected, answer, locale);
 }
 
 export function recommendation(score: number, answered: number, modules: CurriculumModule[]): string {
-  const ratio = answered ? score / answered : 0;
-  const position = ratio >= 0.75 ? 0.7 : ratio >= 0.65 ? 0.45 : ratio >= 0.55 ? 0.2 : 0;
-  return modules[Math.min(modules.length - 1, Math.floor(modules.length * position))]?.id ?? modules[0]?.id ?? "";
+  return recommendPlacement(score, answered, modules);
 }
 
 export function initialProgress(modules: CurriculumModule[], selectedIndex = 0): Record<string, ModuleStatus> {

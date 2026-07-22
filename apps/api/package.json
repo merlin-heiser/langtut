@@ -13,6 +13,7 @@
     "@google/genai": "latest",
     "@langtut/contracts": "0.1.0",
     "@langtut/domain": "0.1.0",
+    "@langtut/runtime": "0.1.0",
     "ajv": "latest",
     "better-sqlite3": "latest",
     "fastify": "latest",

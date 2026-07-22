@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { AnkiMetrics, CurriculumModule, SessionMode, SessionPlan } from "@langtut/contracts";
 
 export interface PlannerConfig {
@@ -44,7 +43,7 @@ export function createSessionPlan(anki: AnkiMetrics, module: CurriculumModule | 
     reasons.push("Reviewlast und Lernstand liegen im normalen Arbeitsbereich.");
   }
   return {
-    id: randomUUID(),
+    id: crypto.randomUUID(),
     packageId,
     createdAt: new Date().toISOString(),
     mode,

@@ -1,26 +1,11 @@
 import { useEffect, useState } from "react";
 import type { Curriculum, CurriculumModule, Job, LexiconLookupResult, LexiconSenseCandidate, SessionPlan } from "@langtut/contracts";
-import { API_BASE, api, post, uploadPackage } from "./api.js";
+import type { ActivityTurnView as ActivityTurn, ActivityView as Activity, ApiCostSummary, LearningPackageView as LearningPackage, LocalMtSettings, ModuleProgress, PackageShelf, PlacementView as Placement, RuntimeSettings as Settings, RuntimeStatus as Status, SetupPreview as Preview, TutorReportView as TutorReport, TutorSessionView as TutorSession } from "@langtut/runtime";
+import { client } from "./api.js";
 import { nativeGoogleDrive } from "./native-google-drive.js";
 import { readGoogleOAuthClientFile } from "./google-oauth.js";
 
-type Status = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
-type Preview = { deck: { name: string; action: string }; models: Array<{ name: string; action: string; managed: boolean; fields: string[]; changes?: string[]; templates?: Record<string, unknown>; css?: string }> };
-type Placement = { id: string; status: string; itemsAnswered: number; maxItems: number; recommendedModuleId?: string; weakTags: string[]; nextItem?: { id: string; prompt: string; level: string; kind: string; choices?: string[] } };
-type TutorTurn = { message: string; correction: string; explanation: string; newExample: string; errorTags: string[]; targetLanguageUse: "target" | "mixed" | "source"; goalProgress: "met" | "partial" | "not_met"; conversationState: "continue" | "closing" | "completed" };
-type TutorReport = { focusTags: string[]; observedErrors: string[]; observedStrengths: string[]; languageSwitches: number; goalCompletionPercent: number; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
-type ApiCostSummary = { currency: "USD"; weekCost: number; totalCost: number; weekInputTokens: number; weekOutputTokens: number; totalInputTokens: number; totalOutputTokens: number; weekStartedAt: string; trackedSince: string | null; pricingVersion: string };
-type LocalMtModelStatus = { key: string; family: string; modelId: string; revision: string; license: string; sizeBytes: number; sourceLanguages: string[]; targetLanguages: string[]; priority: number; status: string; error?: string };
-type LocalMtSettings = { enabled: boolean; cloudFallback: boolean; status?: { runtime?: { available: boolean; error?: string }; models?: LocalMtModelStatus[] } };
-type SyncStatus = { configured: boolean; connected: boolean; pendingEvents: number; lastSyncAt?: string; error?: string; googleOAuthClientId?: string };
-type Settings = { anki: { configured: boolean }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } }; localMt: LocalMtSettings; sync?: SyncStatus };
 type ModelSettingsResponse = Pick<Settings, "models">;
-type LearningPackage = { id: string; version: string; name: string; targetLanguage: { code: string; name: string }; sourceLanguage: { code: string; name: string }; active: boolean; modules: number; progress: { started: number; completed: number; total: number }; capabilities: { placement: boolean; nativeVocabulary: boolean; customPrompts: boolean; activities: boolean } };
-type PackageShelf = { activePackageId: string; packages: LearningPackage[] };
-type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; attemptedMilestoneIds: string[] }> };
-type Activity = { id: string; title: string; description?: string; type?: "roleplay"; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number };
-type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
-type TutorSession = { id: string; status: string; moduleId?: string; activity?: Activity; initialTurns?: ActivityTurn[] };
 type ConversationExchange = { id: string; learner: string; responses: ActivityTurn[]; status: "pending" | "complete" };
 
 export function App() {
@@ -43,6 +28,8 @@ export function App() {
   const [apiKeyDialog, setApiKeyDialog] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [providerKeys, setProviderKeys] = useState({ openai: "", gemini: "" });
+  const [savingProvider, setSavingProvider] = useState<"openai" | "gemini">();
   const [settings, setSettings] = useState<Settings>();
   const [savingModels, setSavingModels] = useState(false);
   const [savingLocalMt, setSavingLocalMt] = useState(false);
@@ -57,7 +44,7 @@ export function App() {
 
   const reload = async () => {
     const [nextStatus, nextCosts, nextCurriculum, nextModuleProgress, latestPlacement, latestJob, nextSettings, nextPackages, nextActivities] = await Promise.all([
-      api<Status>("/status"), api<ApiCostSummary>("/costs/summary"), api<Curriculum>("/curriculum"), api<ModuleProgress>("/modules/progress"), api<Placement | null>("/placement-sessions/latest"), api<Job | null>("/jobs/latest"), api<Settings>("/settings"), api<PackageShelf>("/packages"), api<{ activities: Activity[] }>("/activities"),
+      client.status(), client.costs(), client.curriculum(), client.moduleProgress(), client.latestPlacement(), client.latestJob(), client.settings(), client.packages(), client.activities(),
     ]);
     setStatus(nextStatus); setCosts(nextCosts); setCurriculum(nextCurriculum); setPlacement(latestPlacement ?? undefined);
     setModuleProgress(nextModuleProgress.modules);
@@ -65,10 +52,10 @@ export function App() {
     setSettings(nextSettings);
     setPackageShelf(nextPackages); setActivities(nextActivities.activities); setActivityId((selected) => nextActivities.activities.some(({ id }) => id === selected) ? selected : nextActivities.activities[0]?.id);
   };
-  const refreshCosts = async () => setCosts(await api<ApiCostSummary>("/costs/summary"));
+  const refreshCosts = async () => setCosts(await client.costs());
   const handleError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    if (/valid api key must be provided|API_KEY is not configured|api key/i.test(message)) {
+    if (/valid api key must be provided|anki.?connect.*api.?key/i.test(message)) {
       setApiKeyDialog(true);
       return;
     }
@@ -78,7 +65,7 @@ export function App() {
   useEffect(() => {
     if (!job || ["completed", "failed"].includes(job.status)) return;
     const timer = window.setInterval(async () => {
-      const next = await api<Job>(`/jobs/${job.id}`);
+      const next = await client.job(job.id);
       setJob(next);
       await refreshCosts();
       if (["completed", "failed"].includes(next.status)) {
@@ -94,27 +81,27 @@ export function App() {
   const credited = curriculum?.modules.filter((module) => module.status === "credited").length ?? 0;
   const recoveredAnkiFailure = job?.status === "failed" && status?.anki.reachable && /Anki ist nicht erreichbar|valid api key/i.test(job.error ?? "");
 
-  async function startPlacement() { try { setPlacement(await post<Placement>("/placement-sessions")); } catch (error) { handleError(error); } }
+  async function startPlacement() { try { setPlacement(await client.startPlacement()); } catch (error) { handleError(error); } }
   async function submitAnswer(value = answer) {
     if (!placement?.nextItem || !value.trim()) return;
     try {
-      const result = await post<Placement>(`/placement-sessions/${placement.id}/answers`, { itemId: placement.nextItem.id, answer: value });
+      const result = await client.answerPlacement(placement.id, placement.nextItem.id, value);
       setPlacement(result); setAnswer(""); await refreshCosts();
     } catch (error) { handleError(error); }
   }
   async function chooseModule(moduleId: string) {
     if (!placement) return;
-    setPlacement(await post<Placement>(`/placement-sessions/${placement.id}/override`, { moduleId }));
+    setPlacement(await client.overridePlacement(placement.id, moduleId));
     await reload();
   }
   async function prepare(module: CurriculumModule) {
-    setJob(await post<Job>(`/modules/${module.id}/prepare`));
+    setJob(await client.prepareModule(module.id));
   }
   async function startTutor() {
-    const activePlan = plan ?? await post<SessionPlan>("/session-plans");
+    const activePlan = plan ?? await client.createSessionPlan();
     setPlan(activePlan);
     const selectedActivityId = availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id;
-    setSession(await post<TutorSession>("/sessions", { planId: activePlan.id, moduleId: activePlan.primaryModuleId, activityId: selectedActivityId }));
+    setSession(await client.startSession({ planId: activePlan.id, moduleId: activePlan.primaryModuleId ?? undefined, activityId: selectedActivityId }));
     setTurns([]); setReport(undefined); setSending(false); setSessionInput("");
   }
   async function sendTurn() {
@@ -125,7 +112,7 @@ export function App() {
     setSending(true);
     setTurns((currentTurns) => [...currentTurns, { id: exchangeId, learner, responses: [], status: "pending" }]);
     try {
-      const result = await post<{ turns: ActivityTurn[]; completed: boolean; report?: TutorReport }>(`/sessions/${session.id}/activity-turns`, { message: learner });
+      const result = await client.activityTurn(session.id, learner);
       setTurns((currentTurns) => currentTurns.map((turn) => turn.id === exchangeId ? { ...turn, responses: result.turns, status: "complete" } : turn));
       if (result.completed) {
         setSession((currentSession) => currentSession ? { ...currentSession, status: "completed" } : currentSession);
@@ -141,7 +128,7 @@ export function App() {
     }
   }
   async function recordMilestone(moduleId: string, milestoneId: string) {
-    await post(`/modules/${moduleId}/milestones/${milestoneId}/attempt`);
+    await client.recordMilestone(moduleId, milestoneId);
     setNotice(`Aktiver Versuch für ${milestoneId} protokolliert.`);
     await reload();
   }
@@ -150,15 +137,22 @@ export function App() {
     if (!apiKey.trim()) return;
     setSavingKey(true);
     try {
-      await post(`/settings/anki-api-key`, { apiKey });
+      await client.saveAnkiKey(apiKey);
       setApiKey(""); setApiKeyDialog(false); setNotice("API-Schlüssel gespeichert."); await reload();
     } catch (error) { handleError(error); } finally { setSavingKey(false); }
+  }
+
+  async function saveProviderKey(provider: "openai" | "gemini") {
+    const apiKey = providerKeys[provider].trim(); if (!apiKey) return;
+    setSavingProvider(provider);
+    try { await client.saveProviderKey(provider, apiKey); setProviderKeys((current) => ({ ...current, [provider]: "" })); setNotice(`${provider === "openai" ? "OpenAI" : "Gemini"}-Schlüssel lokal gespeichert.`); await reload(); }
+    catch (error) { handleError(error); } finally { setSavingProvider(undefined); }
   }
 
   async function saveModels(selection: Settings["models"]["selection"]) {
     setSavingModels(true);
     try {
-      const result = await post<ModelSettingsResponse>("/settings/models", selection);
+      const result: ModelSettingsResponse = await client.saveModels(selection);
       if (settings) setSettings({ ...settings, models: result.models });
       setNotice("Modellauswahl gespeichert.");
     } catch (error) { handleError(error); } finally { setSavingModels(false); }
@@ -167,7 +161,7 @@ export function App() {
   async function saveLocalMt(selection: Pick<LocalMtSettings, "enabled" | "cloudFallback">) {
     setSavingLocalMt(true);
     try {
-      const result = await post<{ localMt: LocalMtSettings }>("/settings/local-mt", selection);
+      const result = await client.saveLocalMt(selection);
       if (settings) setSettings({ ...settings, localMt: result.localMt });
       setNotice("Lokale Übersetzungseinstellungen gespeichert.");
     } catch (error) { handleError(error); } finally { setSavingLocalMt(false); }
@@ -176,27 +170,27 @@ export function App() {
   async function installLocalMt(key: string) {
     setInstallingLocalMt(key);
     try {
-      const result = await post<{ localMt: LocalMtSettings }>(`/settings/local-mt/models/${key}/install`);
+      const result = await client.installLocalMt(key);
       if (settings) setSettings({ ...settings, localMt: result.localMt });
       setNotice("Lokales Übersetzungsmodell installiert.");
     } catch (error) { handleError(error); } finally { setInstallingLocalMt(undefined); }
   }
   async function syncNow() {
-    setSyncing(true); try { const sync = await post<SyncStatus>("/sync/now"); if (settings) setSettings({ ...settings, sync }); setNotice(sync.error ?? "Google Drive abgeglichen."); }
+    setSyncing(true); try { const sync = await client.syncNow(); if (settings) setSettings({ ...settings, sync }); setNotice(sync.error ?? "Google Drive abgeglichen."); }
     catch (error) { handleError(error); } finally { setSyncing(false); }
   }
   async function connectGoogle() {
     try {
       if (nativeGoogleDrive.available()) {
         const { accessToken } = await nativeGoogleDrive.signIn();
-        const sync = await post<SyncStatus>("/sync/google/token", { accessToken });
+        const sync = await client.acceptGoogleToken(accessToken);
         if (settings) setSettings({ ...settings, sync });
         setNotice("Google Drive verbunden."); return;
       }
       const clientId = googleClientId.trim() || settings?.sync?.googleOAuthClientId;
       if (!clientId) { setNotice("Bitte zuerst die OAuth-Client-ID aus der Google Cloud Console eintragen."); return; }
-      await post("/sync/google/client", { clientId });
-      window.location.assign(`${API_BASE}/sync/google/authorize`);
+      await client.configureGoogle({ clientId });
+      await client.authorizeGoogle();
     } catch (error) { handleError(error); }
   }
   async function importGoogleOAuth(file?: File) {
@@ -204,7 +198,7 @@ export function App() {
     setImportingGoogleOAuth(true);
     try {
       const oauth = await readGoogleOAuthClientFile(file);
-      await post("/sync/google/client", oauth);
+      await client.configureGoogle(oauth);
       setGoogleClientId(oauth.clientId);
       setSettings((current) => current ? { ...current, sync: { ...(current.sync ?? { connected: false, pendingEvents: 0 }), configured: true, googleOAuthClientId: oauth.clientId } } : current);
       setNotice("Google-OAuth-Konfiguration importiert. Nur die Client-ID wurde übernommen.");
@@ -213,12 +207,12 @@ export function App() {
   }
 
   async function activatePackage(id: string) {
-    try { await post(`/packages/${id}/activate`); setPlan(undefined); setSession(undefined); setTurns([]); setReport(undefined); setPlacement(undefined); await reload(); }
+    try { await client.activatePackage(id); setPlan(undefined); setSession(undefined); setTurns([]); setReport(undefined); setPlacement(undefined); await reload(); }
     catch (error) { handleError(error); }
   }
   async function importPackage(file?: File) {
     if (!file) return; setImportingPackage(true);
-    try { await uploadPackage(file); setNotice("Lernpaket installiert."); await reload(); }
+    try { await client.importPackage(file); setNotice("Lernpaket installiert."); await reload(); }
     catch (error) { handleError(error); } finally { setImportingPackage(false); }
   }
 
@@ -231,9 +225,16 @@ export function App() {
     </header>
 
     {notice && <aside className="notice">{notice}</aside>}
-    {screen === "settings" && !settings?.sync?.connected && <section className="settings-card"><div><small>GOOGLE OAUTH</small><h3>Google Drive verbinden</h3><p>Eine Google-OAuth-JSON-Datei kann auf Windows und Android importiert werden. Langtut übernimmt daraus nur die Client-ID; das Client-Secret bleibt lokal.</p></div><div className="settings-form"><label>OAuth Client-ID<input value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} placeholder={settings?.sync?.googleOAuthClientId ?? "…apps.googleusercontent.com"} autoComplete="off" /></label><label>OAuth-JSON importieren<input type="file" accept="application/json,.json" disabled={importingGoogleOAuth} onChange={(event) => { void importGoogleOAuth(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><button className="primary" onClick={() => void connectGoogle()}>Mit Google verbinden</button></div></section>}
+    {screen === "settings" && !settings?.sync?.connected && <section className="settings-card"><div><small>GOOGLE OAUTH</small><h3>Google Drive verbinden</h3><p>{nativeGoogleDrive.available() ? "Android verwendet die native Google-Kontoauswahl. Es wird keine OAuth-Datei und kein Langtut-Server benötigt." : "Eine Google-OAuth-JSON-Datei kann importiert werden. Langtut übernimmt daraus nur die Client-ID; das Client-Secret bleibt lokal."}</p></div><div className="settings-form">{!nativeGoogleDrive.available() && <><label>OAuth Client-ID<input value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} placeholder={settings?.sync?.googleOAuthClientId ?? "…apps.googleusercontent.com"} autoComplete="off" /></label><label>OAuth-JSON importieren<input type="file" accept="application/json,.json" disabled={importingGoogleOAuth} onChange={(event) => { void importGoogleOAuth(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label></>}<button className="primary" onClick={() => void connectGoogle()}>Mit Google verbinden</button></div></section>}
 
-    {screen === "settings" && <section className="settings-page"><div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div><article className="settings-card"><div><small>GOOGLE DRIVE</small><h3>Lernstand synchronisieren</h3><p>{settings?.sync?.connected ? `Verbunden · ${settings.sync.pendingEvents} lokale Änderungen ausstehend${settings.sync.lastSyncAt ? ` · letzter Abgleich ${new Date(settings.sync.lastSyncAt).toLocaleString("de-DE")}` : ""}` : "Die Google-Anmeldung erfolgt über den Systembrowser. Drive speichert nur Langtut-Ereignisse im privaten App-Datenbereich."}</p>{settings?.sync?.error && <p className="runtime-warning">{settings.sync.error}</p>}</div><div className="settings-form"><button className="primary" disabled={!settings?.sync?.configured || syncing} onClick={() => void syncNow()}>{syncing ? "Gleicht ab …" : "Jetzt abgleichen"}</button>{!settings?.sync?.configured && <small>Google OAuth noch nicht verbunden.</small>}</div></article><article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article><article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert. Für eine getrennte Wahl pro Aufgabe können wir später ein feineres Profil ergänzen.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article>{settings?.localMt && <LocalMtSettingsCard value={settings.localMt} saving={savingLocalMt} installing={installingLocalMt} onChange={(localMt) => setSettings({ ...settings, localMt })} onSave={saveLocalMt} onInstall={installLocalMt} />}</section>}
+    {screen === "settings" && <section className="settings-page">
+      <div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div>
+      <article className="settings-card"><div><small>GOOGLE DRIVE</small><h3>Lernstand synchronisieren</h3><p>{settings?.sync?.connected ? `Verbunden · ${settings.sync.pendingEvents} lokale Änderungen ausstehend${settings.sync.lastSyncAt ? ` · letzter Abgleich ${new Date(settings.sync.lastSyncAt).toLocaleString("de-DE")}` : ""}` : "Die Google-Anmeldung erfolgt über den Systembrowser. Drive speichert nur Langtut-Ereignisse im privaten App-Datenbereich."}</p>{settings?.sync?.error && <p className="runtime-warning">{settings.sync.error}</p>}</div><div className="settings-form"><button className="primary" disabled={!settings?.sync?.configured || syncing} onClick={() => void syncNow()}>{syncing ? "Gleicht ab …" : "Jetzt abgleichen"}</button></div></article>
+      <article className="settings-card"><div><small>LLM-DIENSTE</small><h3>Provider-Schlüssel</h3><p>Schlüssel bleiben im lokalen Plattform-Speicher und werden nie an JavaScript oder Drive zurückgegeben.</p></div><div className="settings-form"><label>OpenAI-Schlüssel<input type="password" value={providerKeys.openai} onChange={(event) => setProviderKeys({ ...providerKeys, openai: event.target.value })} autoComplete="off" /></label><button className="primary" disabled={!providerKeys.openai.trim() || savingProvider === "openai"} onClick={() => void saveProviderKey("openai")}>OpenAI speichern</button><label>Gemini-Schlüssel<input type="password" value={providerKeys.gemini} onChange={(event) => setProviderKeys({ ...providerKeys, gemini: event.target.value })} autoComplete="off" /></label><button className="primary" disabled={!providerKeys.gemini.trim() || savingProvider === "gemini"} onClick={() => void saveProviderKey("gemini")}>Gemini speichern</button></div></article>
+      {settings?.anki.mode !== "ankidroid" && <article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article>}
+      <article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article>
+      {settings?.localMt && <LocalMtSettingsCard value={settings.localMt} saving={savingLocalMt} installing={installingLocalMt} onChange={(localMt) => setSettings({ ...settings, localMt })} onSave={saveLocalMt} onInstall={installLocalMt} />}
+    </section>}
 
     {screen === "dashboard" && <><section className="package-shelf">
       <div className="section-title"><span>00</span><h2>Paketablage</h2></div>
@@ -245,7 +246,7 @@ export function App() {
         <article className="mode-card">
           <small>SESSIONMODUS</small><strong>{plan?.mode ?? "NOCH OFFEN"}</strong>
           <p>{plan?.reasons[0] ?? "Der deterministische Planner entscheidet aus Reviewlast und Lernstand."}</p>
-          <button disabled={placement?.status !== "completed"} onClick={() => post<SessionPlan>("/session-plans").then(setPlan).catch(handleError)}>Tag planen <span>→</span></button>
+          <button disabled={placement?.status !== "completed"} onClick={() => client.createSessionPlan().then(setPlan).catch(handleError)}>Tag planen <span>→</span></button>
         </article>
         <article className="metric"><b>{status?.anki.dueReviews ?? "–"}</b><span>fällige Langtut-Reviews</span></article>
         <article className="metric"><b>{credited}</b><span>angerechnete Module</span></article>
@@ -301,7 +302,7 @@ export function App() {
 
     <section>
       <div className="section-title"><span>05</span><h2>Einrichtung</h2></div>
-      <article className="setup"><div><h3>Anki-Modelle</h3><p>Beim Vorbereiten des ersten Moduls richtet Langtut seine eigenen Modelle automatisch ein. Der optionale Diff zeigt vorab Felder, Karten und CSS; fremde Modelle bleiben unangetastet.</p></div><div className="setup-actions"><button onClick={() => post<Preview>("/integrations/anki/setup/preview").then(setPreview).catch(handleError)}>Optionalen Diff ansehen</button>{preview && preview.models.some(({ action }) => action !== "none") && <button className="primary" onClick={() => post<Preview>("/integrations/anki/setup/apply", { confirm: true }).then(setPreview).catch(handleError)}>Jetzt sicher einrichten</button>}</div></article>
+      <article className="setup"><div><h3>Anki-Modelle</h3><p>Beim Vorbereiten des ersten Moduls richtet Langtut seine eigenen Modelle automatisch ein. Der optionale Diff zeigt vorab Felder, Karten und CSS; fremde Modelle bleiben unangetastet.</p></div><div className="setup-actions"><button onClick={() => client.previewAnkiSetup().then(setPreview).catch(handleError)}>Optionalen Diff ansehen</button>{preview && preview.models.some(({ action }) => action !== "none") && <button className="primary" onClick={() => client.applyAnkiSetup().then(setPreview).catch(handleError)}>Jetzt sicher einrichten</button>}</div></article>
       {preview && <div className="diff"><p>Deck <b>{preview.deck.name}</b>: {setupActionLabel(preview.deck.action)}</p>{preview.models.map((model) => <details key={model.name} open={model.action !== "none"}><summary>{model.name}: <b>{setupActionLabel(model.action)}</b> {model.changes?.join(" · ")}</summary><p>Felder: {model.fields.join(", ")}</p><p>Templates: {Object.keys(model.templates ?? {}).join(", ")}</p><pre>{model.css}</pre></details>)}</div>}
     </section></>}
 
@@ -317,7 +318,7 @@ function LocalMtSettingsCard({ value, saving, installing, onChange, onSave, onIn
   onInstall: (key: string) => Promise<void>;
 }) {
   const runtime = value.status?.runtime;
-  return <article className="settings-card local-mt-settings"><div><small>LOKALE ÜBERSETZUNG</small><h3>Weniger API-Aufrufe</h3><p>Installierte Modelle übersetzen ausgewählte Wörter lokal. Ergebnisse bleiben bis zur bestehenden Qualitätsprüfung als ungeprüft markiert.</p><p className={runtime?.available ? "runtime-ok" : "runtime-warning"}>{runtime?.available ? "Python-Laufzeit bereit" : runtime?.error ?? "Laufzeitstatus unbekannt"}</p></div><div className="settings-form"><label className="toggle-row"><input type="checkbox" checked={value.enabled} onChange={(event) => onChange({ ...value, enabled: event.target.checked })} />Lokale Übersetzung aktivieren</label><label className="toggle-row"><input type="checkbox" checked={value.cloudFallback} onChange={(event) => onChange({ ...value, cloudFallback: event.target.checked })} />Cloud-Fallback bei fehlendem oder fehlerhaftem Modell</label><button className="primary" disabled={saving} onClick={() => onSave(value)}>{saving ? "Speichert …" : "Einstellung speichern"}</button><div className="local-model-list">{value.status?.models?.map((model) => <div className="local-model" key={model.key}><div><b>{model.key}</b><small>{model.family} · {formatBytes(model.sizeBytes)} · {model.license}</small><small>{model.sourceLanguages.join(", ")} → {model.targetLanguages.join(", ")} · Revision {model.revision.slice(0, 8)}</small>{model.error && <small className="runtime-warning">{model.error}</small>}</div><button disabled={model.status === "installed" || installing === model.key || !runtime?.available} onClick={() => onInstall(model.key)}>{model.status === "installed" ? "Installiert" : installing === model.key ? "Installiert …" : "Installieren"}</button></div>)}</div></div></article>;
+  return <article className="settings-card local-mt-settings"><div><small>LOKALE ÜBERSETZUNG</small><h3>Weniger API-Aufrufe</h3><p>Installierte Modelle übersetzen ausgewählte Wörter lokal. Ergebnisse bleiben bis zur bestehenden Qualitätsprüfung als ungeprüft markiert.</p><p className={runtime?.available ? "runtime-ok" : "runtime-warning"}>{runtime?.available ? "Python-Laufzeit bereit" : runtime?.error ?? "Laufzeitstatus unbekannt"}</p></div><div className="settings-form"><label className="toggle-row"><input type="checkbox" disabled={!runtime?.available} checked={value.enabled} onChange={(event) => onChange({ ...value, enabled: event.target.checked })} />Lokale Übersetzung aktivieren</label><label className="toggle-row"><input type="checkbox" disabled={!runtime?.available} checked={value.cloudFallback} onChange={(event) => onChange({ ...value, cloudFallback: event.target.checked })} />Cloud-Fallback bei fehlendem oder fehlerhaftem Modell</label><button className="primary" disabled={saving || !runtime?.available} onClick={() => onSave(value)}>{saving ? "Speichert …" : "Einstellung speichern"}</button><div className="local-model-list">{value.status?.models?.map((model) => <div className="local-model" key={model.key}><div><b>{model.key}</b><small>{model.family} · {formatBytes(model.sizeBytes)} · {model.license}</small><small>{model.sourceLanguages.join(", ")} → {model.targetLanguages.join(", ")} · Revision {model.revision.slice(0, 8)}</small>{model.error && <small className="runtime-warning">{model.error}</small>}</div><button disabled={model.status === "installed" || installing === model.key || !runtime?.available} onClick={() => onInstall(model.key)}>{model.status === "installed" ? "Installiert" : installing === model.key ? "Installiert …" : "Installieren"}</button></div>)}</div></div></article>;
 }
 
 function PartnerMessage({ response, sessionId, targetLanguageCode, sourceLanguageCode }: { response: ActivityTurn; sessionId: string; targetLanguageCode?: string; sourceLanguageCode?: string }) {
@@ -327,13 +328,13 @@ function PartnerMessage({ response, sessionId, targetLanguageCode, sourceLanguag
     if (!targetLanguageCode || !sourceLanguageCode) return;
     setLookup({ surface, loading: true });
     try {
-      const result = await post<LexiconLookupResult>("/lexicon/lookup", { text: response.turn.message, surface, targetLanguageCode, sourceLanguageCode, sessionId });
+      const result = await client.lookupLexicon({ text: response.turn.message, surface, targetLanguageCode, sourceLanguageCode, sessionId });
       setLookup({ surface, result });
     } catch { setLookup({ surface, result: { status: "not_found", surface, candidates: [] } }); }
   }
   async function remember(candidate: LexiconSenseCandidate) {
     if (!targetLanguageCode || !sourceLanguageCode || !lookup) return;
-    await post("/lexicon/staging", { sessionId, senseId: candidate.senseId, surface: lookup.surface, lemma: candidate.lemma, pos: candidate.pos, translation: candidate.translation, context: response.turn.message, targetLanguageCode, sourceLanguageCode, origin: candidate.origin });
+    await client.stageLexicon({ sessionId, senseId: candidate.senseId, surface: lookup.surface, lemma: candidate.lemma, pos: candidate.pos, translation: candidate.translation, context: response.turn.message, targetLanguageCode, sourceLanguageCode, origin: candidate.origin });
     setLookup({ ...lookup, saved: true });
   }
   return <div className="message-row partner-row"><small className="message-label">{response.roleLabel}</small><div className="message-bubble partner-bubble lookup-bubble">{segments.map((segment) => segment.isWord ? <button className="lookup-word" key={segment.index} onClick={() => void inspect(segment.text)}>{segment.text}</button> : <span key={segment.index}>{segment.text}</span>)}</div>{lookup && <div className="lexicon-popover" role="status"><button className="lookup-close" aria-label="Wörterbuch schließen" onClick={() => setLookup(undefined)}>×</button><small>WÖRTERBUCH · {lookup.result?.status === "ai_resolved" ? "KI-KONTEXTAUFLÖSUNG" : lookup.result?.status === "local_mt_candidate" ? "LOKALE MT · UNGEPRÜFT" : "LOKAL"}</small><b>{lookup.surface}</b>{lookup.loading ? <p>Wird nachgeschlagen …</p> : lookup.result?.candidates.length ? lookup.result.candidates.map((candidate) => <div className="lexicon-candidate" key={candidate.senseId ?? `${candidate.lemma}:${candidate.translation}`}><p><strong>{candidate.lemma}</strong> <span>{candidate.pos}</span><br />{candidate.translation}</p>{candidate.gloss && <p className="lexicon-gloss">{candidate.gloss}</p>}<button disabled={lookup.saved} onClick={() => void remember(candidate)}>{lookup.saved ? "Vorgemerkt" : "Merken"}</button></div>) : <p>Kein sicherer Treffer gefunden.</p>}</div>}</div>;

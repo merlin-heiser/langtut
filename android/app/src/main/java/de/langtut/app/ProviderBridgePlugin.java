@@ -2,6 +2,8 @@ package de.langtut.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import androidx.security.crypto.EncryptedSharedPreferences;
+import androidx.security.crypto.MasterKey;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -16,7 +18,15 @@ import java.net.URL;
 /** Native HTTP bridge: provider keys stay in Android app storage and never enter the web bundle or Drive events. */
 @CapacitorPlugin(name = "ProviderBridge")
 public class ProviderBridgePlugin extends Plugin {
-  private SharedPreferences preferences() { return getContext().getSharedPreferences("langtut-provider-keys", Context.MODE_PRIVATE); }
+  private SharedPreferences preferences() {
+    try {
+      MasterKey key = new MasterKey.Builder(getContext()).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build();
+      return EncryptedSharedPreferences.create(getContext(), "langtut-provider-keys", key, EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV, EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
+    } catch (Exception error) { throw new IllegalStateException("Secure provider storage unavailable", error); }
+  }
+  @PluginMethod public void status(PluginCall call) {
+    JSObject result = new JSObject(); result.put("openai", preferences().contains("openai")); result.put("gemini", preferences().contains("gemini")); call.resolve(result);
+  }
   @PluginMethod public void setKey(PluginCall call) {
     String provider = call.getString("provider"); String key = call.getString("key");
     if (!"openai".equals(provider) && !"gemini".equals(provider)) { call.reject("Unsupported provider"); return; }

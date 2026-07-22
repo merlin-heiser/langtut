@@ -9,6 +9,7 @@ export interface AnkiGateway {
   applySetup(): Promise<SetupPreview>;
   addItems(items: CandidateItem[]): Promise<Array<number | null>>;
   removeNotes(noteIds: number[]): Promise<void>;
+  syncModuleAvailability(packageId: string, learningModuleIds: string[]): Promise<void>;
 }
 
 export class AnkiClient implements AnkiGateway {
@@ -137,6 +138,16 @@ export class AnkiClient implements AnkiGateway {
 
   async removeNotes(noteIds: number[]): Promise<void> {
     if (noteIds.length) await this.invoke("deleteNotes", { notes: noteIds });
+  }
+
+  async syncModuleAvailability(packageId: string, learningModuleIds: string[]): Promise<void> {
+    const base = `tag:langtut tag:package::${packageId}`;
+    const active = await this.invoke<number[]>("findCards", { query: `${base} -is:suspended` });
+    if (active.length) await this.invoke("suspend", { cards: active });
+    for (const moduleId of [...new Set(learningModuleIds)]) {
+      const cards = await this.invoke<number[]>("findCards", { query: `${base} tag:module::${moduleId}` });
+      if (cards.length) await this.invoke("unsuspend", { cards });
+    }
   }
 }
 

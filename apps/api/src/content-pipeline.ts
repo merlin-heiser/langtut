@@ -8,6 +8,8 @@ import type { AnkiGateway } from "./anki.js";
 import type { ModelGateway } from "./providers.js";
 import { LexiconService } from "./lexicon.js";
 import type { LocalMtGateway } from "./local-mt.js";
+import { buildGenerationPrompt } from "@langtut/runtime";
+export { buildGenerationPrompt } from "@langtut/runtime";
 
 interface ImportResult {
   generated: number;
@@ -118,6 +120,7 @@ export class ContentPipeline {
     evidence.importedMilestones = this.store.importedCoverage(this.pkg.manifest.id, module.id, "rule", "milestoneId");
     const status = deriveModuleStatus("preparing", module, evidence);
     this.store.saveEvidence(this.pkg.manifest.id, module.id, evidence, status);
+    await this.anki.syncModuleAvailability(this.pkg.manifest.id, Object.entries(this.store.getProgress(this.pkg.manifest.id)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId));
     this.store.updateJob(jobId, { status: "completed", progress: 1, message: "Modulmaterial vollständig vorbereitet; Milestone-Aufgaben stehen noch aus." });
     await this.log({ event: "job_completed", jobId, moduleId: module.id, importedVocab: evidence.importedVocab, importedFunctions: evidence.importedFunctions.length, importedMilestones: evidence.importedMilestones.length });
   }
@@ -239,27 +242,4 @@ function normalizeCandidateItem(item: CandidateItem): CandidateItem {
     notes: text(item.notes),
     tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === "string") : [],
   };
-}
-
-export function buildGenerationPrompt(pkg: LoadedLearningPackage, module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[], requestedIds?: string[]): string {
-  const requested = new Set(requestedIds ?? []);
-  const functions = requested.size ? module.functions.filter((id) => requested.has(id)) : module.functions;
-  const milestones = requested.size ? module.grammarMilestones.filter(({ id }) => requested.has(id)) : module.grammarMilestones;
-  const roleInstruction = kind === "vocab"
-    ? `Erzeuge lexikalischen Wortschatz aus diesen Domänen: ${module.vocabDomains.join(", ")}.
-Erzeuge keine sprachwissenschaftlichen Bezeichnungen (z. B. Kasus, Vokal, Betonung, Aspekt, Satzart), keine einzelnen Buchstaben oder Zeichen und keine einzelnen Formen eines Konjugations-/Deklinationsparadigmas. Verben stehen grundsätzlich im Infinitiv, Nomen in der Wörterbuchform und Adjektive in der Grundform. Funktionswörter wie čo, kde oder keď sind zulässig, wenn sie selbst kommunikativ gebraucht werden. Die deutsche Seite ist eine direkte lexikalische Übersetzung; der Beispielsatz zeigt Alltagsgebrauch und erklärt keine Sprachregel.`
-    : kind === "chunk"
-      ? `Erzeuge feste, direkt verwendbare Wendungen, die genau diese kommunikativen Funktionen realisieren: ${functions.join(", ")}. Erzeuge keine bloßen Namen der Funktionen und keine Grammatikterminologie.`
-      : `Erzeuge je Grammatik-Milestone eine verständliche Regel-/Abrufnote für diese Ziele: ${milestones.map((m) => `${m.id}: ${m.description}`).join(" | ")}. Hier ist notwendige Metasprache erlaubt, sofern sie knapp erklärt und an konkreten Beispielen gezeigt wird.`;
-  const taskId = kind === "vocab" ? "vocabulary_generation" : kind === "chunk" ? "chunk_generation" : "rule_generation";
-  return `${renderPackagePrompt(pkg.prompts[taskId], pkg)}
-Erzeuge exakt ${count} ${kind}-Lernobjekte für ${pkg.manifest.targetLanguage.name} (Erklärungssprache ${pkg.manifest.sourceLanguage.name}).
-Modulkennung: ${module.id}; Niveau: ${module.displayLevel}.
-${roleInstruction}
-Verwende ausschließlich diese fachlichen Tags: ${module.focusTags.join(", ")}.
-Jedes Objekt enthält genau eine primäre Information, korrekte Orthografie und natürliche beidsprachige Beispiele.
-Formuliere Übersetzung, Notiz und Beispiele knapp: eine kurze Notiz und je ein kurzer Beispielsatz genügen.
-Bereits verwendete oder abgelehnte Vorderseiten (auch keine bloßen Schreibvarianten erneut erzeugen): ${JSON.stringify(exclusions)}.
-kind muss "${kind}" und moduleId muss "${module.id}" sein. itemId muss stabil und eindeutig wirken.
-Für chunks ordne functionId zu; für rules milestoneId.`;
 }
