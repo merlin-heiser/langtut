@@ -15,6 +15,9 @@
           "id": { "type": "string", "minLength": 1 },
           "title": { "type": "string", "minLength": 1 },
           "description": { "type": "string" },
+          "type": { "enum": ["roleplay"] },
+          "scenarioTarget": { "type": "string", "minLength": 1 },
+          "scenarioSource": { "type": "string", "minLength": 1 },
           "roles": {
             "type": "array",
             "minItems": 2,

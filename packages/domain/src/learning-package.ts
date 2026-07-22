@@ -23,6 +23,9 @@ export interface LearningActivity {
   id: string;
   title: string;
   description?: string;
+  type?: "roleplay";
+  scenarioTarget?: string;
+  scenarioSource?: string;
   roles: ActivityRole[];
   turnOrder: string[];
   rounds: number;
@@ -211,6 +214,11 @@ function validateActivities(activities: LearningActivity[], prompts: Record<stri
     const roles = new Set(activity.roles.map((role) => role.id));
     if (roles.size !== activity.roles.length || activity.turnOrder.some((role) => !roles.has(role)) || activity.turnOrder.length !== activity.roles.length || activity.roles.some(({ id }) => !activity.turnOrder.includes(id))) throw new Error(`${activity.id}: invalid role or turn order`);
     if (!activity.roles.some(({ controller }) => controller === "learner") || !activity.roles.some(({ controller }) => controller !== "learner")) throw new Error(`${activity.id}: needs learner and partner roles`);
+    if (activity.type === "roleplay") {
+      if (!activity.scenarioTarget?.trim() || !activity.scenarioSource?.trim()) throw new Error(`${activity.id}: roleplay needs target and source scenarios`);
+      const learnerIndex = activity.turnOrder.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner");
+      if (learnerIndex < 1 || !activity.turnOrder.slice(0, learnerIndex).some((id) => activity.roles.find((role) => role.id === id)?.controller === "llm")) throw new Error(`${activity.id}: roleplay needs an LLM role before the learner`);
+    }
     for (const role of activity.roles) {
       if (role.controller === "llm" && role.prompt && !prompts[role.prompt]) throw new Error(`${activity.id}: unknown role prompt ${role.prompt}`);
       if (role.controller === "fixed" && !role.message?.trim()) throw new Error(`${activity.id}: fixed role ${role.id} needs a message`);

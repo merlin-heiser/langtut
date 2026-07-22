@@ -150,24 +150,48 @@
     "TutorTurn": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["message", "correction", "explanation", "newExample"],
+      "required": ["message", "correction", "explanation", "newExample", "errorTags"],
       "properties": {
         "message": { "type": "string" },
         "correction": { "type": "string" },
         "explanation": { "type": "string" },
-        "newExample": { "type": "string" }
+        "newExample": { "type": "string" },
+        "errorTags": { "type": "array", "maxItems": 3, "items": { "type": "string" } }
       }
     },
     "TutorReport": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["focusTags", "observedErrors", "suggestedReviewItems", "suggestedNewCards", "nextSessionSuggestions"],
+      "required": ["focusTags", "observedErrors", "observedStrengths", "suggestedReviewItems", "suggestedNewCards", "nextSessionSuggestions"],
       "properties": {
         "focusTags": { "type": "array", "items": { "type": "string" } },
         "observedErrors": { "type": "array", "items": { "type": "string" } },
+        "observedStrengths": { "type": "array", "items": { "type": "string" } },
         "suggestedReviewItems": { "type": "array", "items": { "type": "string" } },
         "suggestedNewCards": { "type": "array", "items": { "$ref": "#/definitions/CandidateItem" } },
         "nextSessionSuggestions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "LearnerProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interests", "strengths", "difficulties", "helpfulSupports", "priorities"],
+      "properties": {
+        "interests": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "strengths": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "difficulties": { "type": "array", "maxItems": 8, "items": { "type": "string" } },
+        "helpfulSupports": { "type": "array", "maxItems": 5, "items": { "type": "string" } },
+        "priorities": { "type": "array", "maxItems": 5, "items": { "type": "string" } }
+      }
+    },
+    "SessionAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["report", "profile", "rapportMarkdown"],
+      "properties": {
+        "report": { "$ref": "#/definitions/TutorReport" },
+        "profile": { "$ref": "#/definitions/LearnerProfile" },
+        "rapportMarkdown": { "type": "string", "minLength": 1 }
       }
     },
     "Job": {
