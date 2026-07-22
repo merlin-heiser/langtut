@@ -1,4 +1,4 @@
-.PHONY: force webapp
+.PHONY: force webapp androidapp
 
 # `force` is a modifier for `webapp`, not a standalone restart.
 force:
@@ -6,3 +6,6 @@ force:
 
 webapp:
 	@pwsh -NoProfile -File scripts/webapp.ps1 $(if $(filter force,$(MAKECMDGOALS)),-Force,)
+
+androidapp:
+	@pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/android-app.ps1

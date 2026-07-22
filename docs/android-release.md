@@ -49,6 +49,16 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb shell monkey -p de.langtut.app 1
 ```
 
+Für den kompletten lokalen Build-, Installations- und Startvorgang auf einem
+angeschlossenen Pixel 7 genügt:
+
+```powershell
+make androidapp
+```
+
+Bei mehreren ADB-Verbindungen zum selben oder zu mehreren Pixel-7-Geräten kann
+das Ziel mit `LANGTUT_ADB_SERIAL` eindeutig gewählt werden.
+
 If the same phone is visible over USB and Wi-Fi, set `LANGTUT_ADB_SERIAL` to the desired
 value from `adb devices -l` before running the script.
 
