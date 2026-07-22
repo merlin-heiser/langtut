@@ -155,6 +155,15 @@ export class Store {
     return row ?? null;
   }
 
+  failInterruptedJobs(): number {
+    const result = this.db.prepare(`UPDATE jobs
+      SET status='failed', message='Vorbereitung unterbrochen',
+          error='Der API-Server wurde während der Vorbereitung beendet. Bitte Vorbereitung erneut starten.',
+          updated_at=?
+      WHERE status IN ('queued','running')`).run(new Date().toISOString());
+    return result.changes;
+  }
+
   hasActiveWork(packageId: string): boolean {
     const activeJob = this.db.prepare("SELECT 1 FROM jobs WHERE package_id=? AND status IN ('queued','running') LIMIT 1").get(packageId);
     const activeSession = this.db.prepare("SELECT 1 FROM sessions WHERE package_id=? AND status='active' LIMIT 1").get(packageId);

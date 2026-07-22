@@ -23,6 +23,9 @@ type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
 export async function buildApp(root = process.cwd(), overrides: { models?: ModelGateway; anki?: AnkiGateway } = {}) {
   const config = await loadConfig(root);
   const store = await Store.open(config.dbPath, root);
+  // Jobs run in-process. After a restart there is no worker that can resume them,
+  // so leaving them running would permanently block a new preparation.
+  store.failInterruptedJobs();
   const packages = new LearningPackageRepository(root);
   await packages.loadAll();
   let activePackageId = store.getSetting<string>("packages.active") ?? DEFAULT_PACKAGE_ID;

@@ -71,6 +71,20 @@ if ($existing.Count -gt 0) {
 }
 
 Set-Location -LiteralPath $repoRoot
+Write-Host "Webapp lokal: http://localhost:5174" -ForegroundColor Green
+Write-Host "API lokal:    http://localhost:3210" -ForegroundColor DarkGray
+
+$lanAddresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.IPAddress -notlike "127.*" -and
+    $_.IPAddress -notlike "169.254.*" -and
+    $_.PrefixOrigin -ne "WellKnown"
+  } |
+  Select-Object -ExpandProperty IPAddress -Unique)
+foreach ($address in $lanAddresses) {
+  Write-Host "Webapp im Netzwerk: http://${address}:5174" -ForegroundColor Cyan
+}
+
 Write-Host "Starte genau eine Langtut-Instanz. Beenden mit Ctrl+C." -ForegroundColor Green
 & npm.cmd run dev
 exit $LASTEXITCODE

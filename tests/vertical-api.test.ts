@@ -76,14 +76,13 @@ describe("vertical release path with fake integrations", () => {
     expect(anki.notes.filter(({ kind }) => kind === "vocab")).toHaveLength(module.vocabTarget);
     expect(anki.notes.filter(({ kind }) => kind === "chunk")).toHaveLength(module.functions.length);
     expect(anki.notes.filter(({ kind }) => kind === "rule")).toHaveLength(module.grammarMilestones.length);
-    expect(models.vocabularyPrompts).toHaveLength(Math.ceil(module.vocabTarget / 20));
+    expect(models.vocabularyPrompts).toHaveLength(Math.ceil(module.vocabTarget / 40));
     expect(models.vocabularyPrompts[0]).not.toContain(module.title);
     expect(models.vocabularyPrompts[0]).not.toContain(module.grammarMilestones[0].description);
     expect(models.vocabularyPrompts[0]).toContain("keine einzelnen Buchstaben oder Zeichen");
-    expect(models.vocabularyPrompts[1]).toContain('"slovo 0"');
     const diagnostics = (await readFile(path.join(temporary, "diagnostics/slowakisch-deutsch.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
-    expect(diagnostics.filter(({ event }) => event === "batch_finished")).toHaveLength(Math.ceil(module.vocabTarget / 20));
+    expect(diagnostics.filter(({ event }) => event === "batch_finished")).toHaveLength(Math.ceil(module.vocabTarget / 40));
     expect(diagnostics.some(({ event, importedTotal }) => event === "batch_finished" && importedTotal === module.vocabTarget)).toBe(true);
     for (const milestone of module.grammarMilestones) {
       const response = await app.inject({ method: "POST", url: `/api/v1/modules/${module.id}/milestones/${milestone.id}/attempt` });

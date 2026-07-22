@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { CandidateItem, CurriculumModule, GeneratedItems, Job, VerificationResult } from "@langtut/contracts";
-import { deriveModuleStatus, isNearDuplicate, normalizeTarget, renderPackagePrompt, validateCandidate, validateLearningRole, type LoadedLearningPackage } from "@langtut/domain";
+import { deriveModuleStatus, isNearDuplicate, normalizeTarget, renderPackagePrompt, validateCandidate, validateLearningRole, vocabPreparationMinimum, type LoadedLearningPackage } from "@langtut/domain";
 import type { Store } from "./database.js";
 import type { AnkiGateway } from "./anki.js";
 import type { ModelGateway } from "./providers.js";
@@ -15,6 +15,9 @@ interface ImportResult {
   imported: number;
   issues: Record<string, number>;
 }
+
+const VOCAB_GENERATION_BATCH_SIZE = 40;
+const VOCAB_ALTERNATIVE_BUFFER = 8;
 
 export class ContentPipeline {
   constructor(
@@ -51,21 +54,26 @@ export class ContentPipeline {
     const nativeItems = this.pkg.vocabulary.filter((item) => item.moduleId === module.id && !this.store.hasImportedItem(this.pkg.manifest.id, item.itemId));
     if (nativeItems.length) await this.verifyAndImport(module, nativeItems);
     let importedVocab = this.store.countItems(this.pkg.manifest.id, module.id, "vocab");
-    const initiallyMissing = Math.max(0, module.vocabTarget - importedVocab);
-    const maxBatches = Math.ceil(initiallyMissing / 20) + 2;
+    const preparationMinimum = vocabPreparationMinimum(module);
+    const initiallyMissing = Math.max(0, preparationMinimum - importedVocab);
+    const maxBatches = Math.ceil(initiallyMissing / VOCAB_GENERATION_BATCH_SIZE) + 2;
     let batchesExecuted = 0;
-    for (let batch = 1; importedVocab < module.vocabTarget && batch <= maxBatches; batch++) {
+    for (let batch = 1; importedVocab < preparationMinimum && batch <= maxBatches; batch++) {
       batchesExecuted = batch;
-      const count = Math.min(20, module.vocabTarget - importedVocab);
+      const missing = preparationMinimum - importedVocab;
+      // A small final batch is otherwise brittle: one rejected suggestion can
+      // exhaust all replacement attempts. Generate a modest alternative pool,
+      // while importing no more than the remaining target.
+      const count = Math.min(VOCAB_GENERATION_BATCH_SIZE, missing + VOCAB_ALTERNATIVE_BUFFER);
       const exclusions = this.store.generationExclusions(this.pkg.manifest.id, module.id);
       await this.log({ event: "batch_started", jobId, moduleId: module.id, kind: "vocab", batch, maxBatches, requested: count, alreadyImported: importedVocab, exclusions: exclusions.length });
       const items = await this.generate(module, "vocab", count, exclusions);
-      const result = await this.verifyAndImport(module, items);
+      const result = await this.verifyAndImport(module, items, missing);
       importedVocab += result.imported;
       await this.log({ event: "batch_finished", jobId, moduleId: module.id, kind: "vocab", batch, requested: count, ...result, importedTotal: importedVocab });
-      this.store.updateJob(jobId, { progress: Math.min(0.75, importedVocab / Math.max(1, module.vocabTarget) * 0.75), message: `Batch ${batch}/${maxBatches}: ${importedVocab}/${module.vocabTarget} Vokabeln importiert` });
+      this.store.updateJob(jobId, { progress: Math.min(0.75, importedVocab / Math.max(1, preparationMinimum) * 0.75), message: `Batch ${batch}/${maxBatches}: ${importedVocab}/${preparationMinimum} Vokabeln importiert (Ziel: ${module.vocabTarget})` });
     }
-    if (importedVocab < module.vocabTarget) throw new Error(`Vokabelziel nach ${batchesExecuted} Batches nicht erreicht; ${module.vocabTarget - importedVocab} Einträge fehlen. Details: data/diagnostics/content-pipeline.jsonl`);
+    if (importedVocab < preparationMinimum) throw new Error(`Vorbereitungsminimum nach ${batchesExecuted} Batches nicht erreicht; ${preparationMinimum - importedVocab} Einträge fehlen. Details: data/diagnostics/content-pipeline.jsonl`);
 
     const missingFunctions = module.functions.filter((id) => !this.store.importedCoverage(this.pkg.manifest.id, module.id, "chunk", "functionId").includes(id));
     const chunks = missingFunctions.length ? await this.generate(module, "chunk", missingFunctions.length, this.store.generationExclusions(this.pkg.manifest.id, module.id)) : [];
@@ -89,16 +97,17 @@ export class ContentPipeline {
     const taskId = kind === "vocab" ? "vocabulary_generation" : kind === "chunk" ? "chunk_generation" : "rule_generation";
     const prompt = buildGenerationPrompt(this.pkg, module, kind, count, exclusions);
     const result = await this.models.structured<GeneratedItems>(taskId, prompt, "GeneratedItems");
-    return result.items.map((item) => ({ ...item, target: normalizeTarget(item.target), exampleTarget: normalizeTarget(item.exampleTarget) }));
+    return result.items.map(normalizeCandidateItem);
   }
 
-  private async verifyAndImport(module: CurriculumModule, items: CandidateItem[]): Promise<ImportResult> {
+  private async verifyAndImport(module: CurriculumModule, items: CandidateItem[], importLimit = Number.POSITIVE_INFINITY): Promise<ImportResult> {
     const existing = this.store.existingFronts(this.pkg.manifest.id);
     const seen = [...existing];
     const clean: CandidateItem[] = [];
     const issuesByName: Record<string, number> = {};
     let deterministicRejected = 0;
-    for (const item of items) {
+    for (const rawItem of items) {
+      const item = normalizeCandidateItem(rawItem);
       const issues = validateCandidate(item, this.pkg.allowedTags);
       issues.push(...validateLearningRole(item, this.pkg.manifest.targetLanguage.code));
       if (item.moduleId !== module.id) issues.push("wrong_module");
@@ -135,11 +144,12 @@ ${roleRubric} Lehne außerdem bei Fehlern, Irreführung, unnatürlicher Sprache 
       }
       return result?.approved;
     });
-    if (!approved.length) return { generated: items.length, deterministicRejected, semanticRejected, ankiRejected: 0, imported: 0, issues: issuesByName };
-    const noteIds = await this.anki.addItems(approved);
+    const selected = approved.slice(0, importLimit);
+    if (!selected.length) return { generated: items.length, deterministicRejected, semanticRejected, ankiRejected: 0, imported: 0, issues: issuesByName };
+    const noteIds = await this.anki.addItems(selected);
     let imported = 0;
     let ankiRejected = 0;
-    approved.forEach((item, index) => {
+    selected.forEach((item, index) => {
       const noteId = noteIds[index];
       if (noteId) {
         this.store.saveGenerated(this.pkg.manifest.id, { itemId: item.itemId, moduleId: item.moduleId, kind: item.kind, normalized: normalizeTarget(item.target), payload: item }, "imported", noteId);
@@ -155,7 +165,7 @@ ${roleRubric} Lehne außerdem bei Fehlern, Irreführung, unnatürlicher Sprache 
 
   private async retractMisclassifiedVocab(jobId: string, module: CurriculumModule): Promise<number> {
     const invalid = this.store.importedItems<CandidateItem>(this.pkg.manifest.id, module.id, "vocab")
-      .map((entry) => ({ ...entry, issues: validateLearningRole(entry.item, this.pkg.manifest.targetLanguage.code) }))
+      .map((entry) => ({ ...entry, item: normalizeCandidateItem(entry.item), issues: validateLearningRole(normalizeCandidateItem(entry.item), this.pkg.manifest.targetLanguage.code) }))
       .filter(({ issues }) => issues.length > 0);
     if (!invalid.length) return 0;
     const noteIds = invalid.flatMap(({ ankiNoteId }) => ankiNoteId ? [ankiNoteId] : []);
@@ -178,6 +188,23 @@ ${roleRubric} Lehne außerdem bei Fehlern, Irreführung, unnatürlicher Sprache 
 
 function countIssues(issues: string[]): Record<string, number> {
   return issues.reduce<Record<string, number>>((counts, issue) => ({ ...counts, [issue]: (counts[issue] ?? 0) + 1 }), {});
+}
+
+/** Accept the pre-1.0 Slovak/German field names stored by earlier imports. */
+function normalizeCandidateItem(item: CandidateItem): CandidateItem {
+  const legacy = item as CandidateItem & {
+    slovak?: unknown; german?: unknown; exampleSlovak?: unknown; exampleGerman?: unknown;
+  };
+  const text = (value: unknown): string => typeof value === "string" ? normalizeTarget(value) : "";
+  return {
+    ...item,
+    target: text(item.target ?? legacy.slovak),
+    source: text(item.source ?? legacy.german),
+    exampleTarget: text(item.exampleTarget ?? legacy.exampleSlovak),
+    exampleSource: text(item.exampleSource ?? legacy.exampleGerman),
+    notes: text(item.notes),
+    tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === "string") : [],
+  };
 }
 
 export function buildGenerationPrompt(pkg: LoadedLearningPackage, module: CurriculumModule, kind: CandidateItem["kind"], count: number, exclusions: string[]): string {

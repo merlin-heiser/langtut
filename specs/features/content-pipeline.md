@@ -6,10 +6,15 @@ Providerkosten und Anki-Schreibvorgänge beginnen erst nach „Modul vorbereiten
 Gemeinsam genutzte JSON-Schema-Definitionen werden vor dem Provideraufruf vollständig
 aufgelöst, da strukturierte Provider-Ausgaben keine repository-lokalen `$ref`-Ziele
 auflösen können.
-Vokabeln werden in Batches von höchstens 20 erzeugt.
+Vokabeln werden in Kandidatenbatches von höchstens 40 erzeugt. Ein Batch darf
+mehr geprüfte Kandidaten als noch benötigte Karten enthalten; importiert werden
+höchstens so viele, wie für das Vorbereitungsminimum fehlen.
 Jeder Ersatzbatch erhält die curriculumweit bereits importierten sowie die im Modul
 quarantänisierten Zielsprachen-Vorderseiten des aktiven Pakets als Ausschlussliste. Der erste Bedarf plus
-höchstens zwei Ersatzbatches begrenzt unnötige Provideraufrufe. Dubletten innerhalb
+höchstens zwei Ersatzbatches begrenzt unnötige Provideraufrufe. Ab einem harten
+Vokabelziel von 80 gilt ein Vorbereitungsminimum von 90 Prozent; die Differenz
+bleibt für später vom Lernenden importierte, passend zugeordnete Vokabeln frei.
+Dubletten innerhalb
 desselben Batches werden ebenfalls deterministisch erkannt.
 
 ## Szenario: zweistufiges Gate

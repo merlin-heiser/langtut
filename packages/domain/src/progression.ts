@@ -7,11 +7,20 @@ export interface ModuleEvidence {
   attemptedMilestones: string[];
 }
 
+/**
+ * Large vocabulary targets are a coverage goal, not a reason to loop on the
+ * final handful of marginal candidates. The remaining space is intentionally
+ * available for learner-imported vocabulary later in the course.
+ */
+export function vocabPreparationMinimum(module: CurriculumModule): number {
+  return module.vocabTarget >= 80 ? Math.ceil(module.vocabTarget * 0.9) : module.vocabTarget;
+}
+
 export function exposureComplete(module: CurriculumModule, evidence: ModuleEvidence): boolean {
   const functions = new Set(evidence.importedFunctions);
   const rules = new Set(evidence.importedMilestones);
   const attempts = new Set(evidence.attemptedMilestones);
-  return evidence.importedVocab >= module.vocabTarget
+  return evidence.importedVocab >= vocabPreparationMinimum(module)
     && module.functions.every((id) => functions.has(id))
     && module.grammarMilestones.every(({ id }) => rules.has(id) && attempts.has(id));
 }
