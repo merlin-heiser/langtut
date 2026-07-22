@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://langtut.local/schemas/local-mt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "models"],
+  "properties": {
+    "version": { "type": "string" },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "family", "model_id", "revision", "license", "size_bytes", "source_languages", "target_languages", "priority"],
+        "properties": {
+          "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "family": { "enum": ["marian", "m2m100"] },
+          "model_id": { "type": "string" },
+          "revision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+          "license": { "type": "string" },
+          "size_bytes": { "type": "integer", "minimum": 1 },
+          "source_languages": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "target_languages": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "priority": { "type": "number" }
+        }
+      }
+    }
+  }
+}

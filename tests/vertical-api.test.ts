@@ -6,6 +6,7 @@ import type { AnkiMetrics, CandidateItem, CurriculumModule, SessionAnalysis, Tut
 import { buildApp } from "../apps/api/src/app.js";
 import type { AnkiGateway, SetupPreview } from "../apps/api/src/anki.js";
 import type { ModelGateway } from "../apps/api/src/providers.js";
+import type { LocalMtGateway } from "../apps/api/src/local-mt.js";
 import { Store } from "../apps/api/src/database.js";
 import { loadCurriculum } from "../packages/domain/src/index.js";
 
@@ -74,7 +75,30 @@ class FakeModels implements ModelGateway {
   }
 }
 
+class FakeLocalMt implements LocalMtGateway {
+  private value = { enabled: false, cloudFallback: true };
+  installed = false;
+  async translate() { return undefined; }
+  settings() { return { ...this.value }; }
+  configure(value: { enabled: boolean; cloudFallback: boolean }) { this.value = { ...value }; }
+  async status() { return { runtime: { available: true }, models: [{ key: "m2m100-418m", license: "MIT", revision: "revision", sizeBytes: 1_940_000_000, status: this.installed ? "installed" : "not_installed" }] }; }
+  async install(key: string) { if (key !== "m2m100-418m") throw new Error("unknown model"); this.installed = true; }
+}
+
 describe("vertical release path with fake integrations", () => {
+  it("exposes, configures and installs the opt-in local MT provider", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-local-mt-api-"));
+    process.env.LANGTUT_DB_PATH = path.join(temporary, "local-mt.db");
+    const module = (await loadCurriculum(process.cwd())).modules[0];
+    const localMt = new FakeLocalMt();
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models: new FakeModels(module), localMt });
+    expect((await app.inject({ method: "GET", url: "/api/v1/settings" })).json()).toMatchObject({ localMt: { enabled: false, cloudFallback: true } });
+    expect((await app.inject({ method: "POST", url: "/api/v1/settings/local-mt", payload: { enabled: true, cloudFallback: false } })).json()).toMatchObject({ localMt: { enabled: true, cloudFallback: false } });
+    expect((await app.inject({ method: "POST", url: "/api/v1/settings/local-mt/models/m2m100-418m/install" })).statusCode).toBe(201);
+    expect((await app.inject({ method: "GET", url: "/api/v1/status" })).json()).toMatchObject({ providers: { local_mt: { models: [{ key: "m2m100-418m", status: "installed" }] } } });
+    await app.close();
+  });
+
   it("prepares all notes and unlocks the successor after milestone exposure", async () => {
     temporary = await mkdtemp(path.join(tmpdir(), "langtut-vertical-"));
     process.env.LANGTUT_DB_PATH = path.join(temporary, "vertical.db");

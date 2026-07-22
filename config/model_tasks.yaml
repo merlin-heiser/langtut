@@ -16,6 +16,21 @@ tasks:
     reasoning_effort: low
     max_output_tokens: 800
     schema: placement-evaluation
+  lexicon_resolution:
+    provider: openai
+    model: gpt-5.6-terra
+    quality: balanced
+    latency: interactive
+    reasoning_effort: low
+    max_output_tokens: 500
+    schema: lexicon-ai-resolution
+  lexicon_materialization:
+    provider: gemini
+    model: gemini-3.5-flash
+    quality: balanced
+    latency: batch
+    max_output_tokens: 8000
+    schema: lexicon-materializations
   vocabulary_generation:
     provider: gemini
     model: gemini-3.5-flash

@@ -24,6 +24,14 @@ export interface GeneratedContracts {
   PlacementItem?: PlacementItem;
   PlacementStep?: PlacementStep;
   PlacementEvaluation?: PlacementEvaluation;
+  LexiconLookupRequest?: LexiconLookupRequest;
+  LexiconSenseCandidate?: LexiconSenseCandidate;
+  LexiconLookupResult?: LexiconLookupResult;
+  LexiconAiResolution?: LexiconAiResolution;
+  LexiconMaterializations?: LexiconMaterializations;
+  LexiconStagingRequest?: LexiconStagingRequest;
+  LocalMtTranslationResult?: LocalMtTranslationResult;
+  LexiconSelectionTrace?: LexiconSelectionTrace;
   [k: string]: unknown;
 }
 export interface GrammarMilestone {
@@ -218,4 +226,78 @@ export interface PlacementEvaluation {
   score: number;
   feedback: string;
   weakTags: string[];
+}
+export interface LexiconLookupRequest {
+  text: string;
+  surface: string;
+  targetLanguageCode: string;
+  sourceLanguageCode: string;
+  sessionId?: string;
+}
+export interface LexiconSenseCandidate {
+  senseId?: string;
+  lemma: string;
+  pos: string;
+  translation: string;
+  gloss?: string;
+  morphology?: {
+    [k: string]: unknown;
+  };
+  origin: "dictionary" | "concept" | "llm" | "local_mt" | "native";
+  confidence: number;
+}
+export interface LexiconLookupResult {
+  status: "resolved" | "ambiguous" | "local_mt_candidate" | "ai_resolved" | "not_found";
+  surface: string;
+  candidates: LexiconSenseCandidate[];
+}
+export interface LexiconAiResolution {
+  senseId?: string;
+  lemma: string;
+  pos: string;
+  translation: string;
+  gloss?: string;
+  exampleTarget?: string;
+  exampleSource?: string;
+  notes?: string;
+  confidence: number;
+}
+export interface LexiconMaterializations {
+  items: {
+    senseId: string;
+    translation: string;
+    exampleTarget: string;
+    exampleSource: string;
+    notes: string;
+    confidence: number;
+  }[];
+}
+export interface LexiconStagingRequest {
+  sessionId?: string;
+  senseId?: string;
+  surface: string;
+  lemma: string;
+  pos: string;
+  translation: string;
+  context?: string;
+  targetLanguageCode: string;
+  sourceLanguageCode: string;
+  origin: "dictionary" | "concept" | "llm" | "local_mt" | "native";
+}
+export interface LocalMtTranslationResult {
+  translation: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  modelKey: string;
+  modelId: string;
+  modelRevision: string;
+  license: string;
+  confidence: number;
+  mode: "direct" | "pivot";
+}
+export interface LexiconSelectionTrace {
+  senseId: string;
+  score: number;
+  seed: string;
+  reasons: string[];
 }

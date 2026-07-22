@@ -4,7 +4,7 @@ import path from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import type { LearnerProfile, PlacementEvaluation, SessionAnalysis, TutorReport, TutorTurn } from "@langtut/contracts";
+import type { LearnerProfile, LexiconLookupRequest, LexiconStagingRequest, PlacementEvaluation, SessionAnalysis, TutorReport, TutorTurn } from "@langtut/contracts";
 import {
   DEFAULT_PACKAGE_ID, LearningPackageRepository, applyProgress, createSessionPlan, deriveModuleStatus,
   nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, type LearningActivity, type LoadedLearningPackage,
@@ -14,6 +14,8 @@ import { AnkiClient, type AnkiGateway } from "./anki.js";
 import { loadConfig } from "./config.js";
 import { ContentPipeline } from "./content-pipeline.js";
 import { Store } from "./database.js";
+import { LexiconService } from "./lexicon.js";
+import { LocalMtClient, type LocalMtGateway } from "./local-mt.js";
 import { newPlacement, recommendation, scoreAnswer } from "./placement.js";
 import { ModelRouter, modelChoices, type ModelGateway } from "./providers.js";
 import { aggregateErrorTags, aggregateLearningSignals, buildLearnerContext, readRapport, transcriptFromEvents, writeRapportAtomic } from "./rapport.js";
@@ -22,7 +24,7 @@ type PlacementState = ReturnType<typeof newPlacement> & { packageId: string; ans
 type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
 type ActivityOutcome = { turns: ActivityTurn[]; shouldComplete: boolean };
 
-export async function buildApp(root = process.cwd(), overrides: { models?: ModelGateway; anki?: AnkiGateway } = {}) {
+export async function buildApp(root = process.cwd(), overrides: { models?: ModelGateway; anki?: AnkiGateway; localMt?: LocalMtGateway } = {}) {
   const config = await loadConfig(root);
   const store = await Store.open(config.dbPath, root);
   // Jobs run in-process. After a restart there is no worker that can resume them,
@@ -38,6 +40,8 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   if (savedModelSelection && models instanceof ModelRouter) models.setModelSelection(savedModelSelection);
   const anki = overrides.anki ?? new AnkiClient(config.anki.url, config.anki.deck, config.anki.key);
   const dataRoot = path.dirname(config.dbPath);
+  const localMtSettings = store.getSetting<{ enabled: boolean; cloudFallback: boolean }>("local_mt.settings") ?? { enabled: false, cloudFallback: true };
+  const localMt = overrides.localMt ?? await LocalMtClient.load(root, dataRoot, store, localMtSettings);
 
   function active(): LoadedLearningPackage {
     const pkg = packages.require(activePackageId);
@@ -57,7 +61,8 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   }
 
   const app = Fastify({ logger: true });
-  await app.register(cors, { origin: true });
+  const allowedOrigins = process.env.LANGTUT_CORS_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean);
+  await app.register(cors, { origin: allowedOrigins?.length ? allowedOrigins : true });
   await app.register(multipart, { limits: { files: 1, fileSize: 50 * 1024 * 1024 } });
 
   async function refreshCurriculum() {
@@ -67,11 +72,12 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     for (const module of base.modules) store.setStatus(pkg.manifest.id, module.id, progress[module.id]);
     return applyProgress(pkg.curriculum, progress);
   }
-  function pipeline() { return new ContentPipeline(store, anki, models, active(), path.join(path.dirname(config.dbPath), "diagnostics", `${activePackageId}.jsonl`)); }
+  function pipeline() { return new ContentPipeline(store, anki, models, active(), path.join(path.dirname(config.dbPath), "diagnostics", `${activePackageId}.jsonl`), localMt); }
+  function lexicon() { return new LexiconService(store, models, active(), localMt); }
   function packageList() { return packages.list(activePackageId).map((pkg) => { const progress = store.getProgress(pkg.id); return { ...pkg, progress: { started: Object.values(progress).filter((status) => ["preparing", "learning", "credited"].includes(status)).length, completed: Object.values(progress).filter((status) => ["learning", "credited"].includes(status)).length, total: pkg.modules } }; }); }
 
   await refreshCurriculum();
-  app.addHook("onClose", async () => store.close());
+  app.addHook("onClose", async () => { await localMt.close?.(); store.close(); });
 
   app.get("/api/v1/packages", async () => ({ activePackageId, packages: packageList() }));
   app.get<{ Params: { id: string } }>("/api/v1/packages/:id", async (request, reply) => {
@@ -101,13 +107,14 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   });
 
   app.get("/api/v1/status", async () => {
-    const [curriculum, ankiStatus] = await Promise.all([refreshCurriculum(), anki.metrics()]);
-    return { packageId: activePackageId, database: { reachable: true }, curriculum: { version: curriculum.version, modules: curriculum.modules.length }, providers: models.status(), anki: ankiStatus };
+    const [curriculum, ankiStatus, localMtStatus] = await Promise.all([refreshCurriculum(), anki.metrics(), localMt.status?.()]);
+    return { packageId: activePackageId, database: { reachable: true }, curriculum: { version: curriculum.version, modules: curriculum.modules.length }, providers: { ...models.status(), local_mt: localMtStatus }, anki: ankiStatus };
   });
   app.get("/api/v1/costs/summary", async () => store.getApiCostSummary(new Date(), models.pricingVersion?.() ?? "untracked"));
   app.get("/api/v1/settings", async () => ({
     anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key) },
     models: { selection: models instanceof ModelRouter ? models.modelSelection() : undefined, choices: modelChoices },
+    localMt: { ...(localMt.settings?.() ?? localMtSettings), status: await localMt.status?.() },
   }));
   app.post<{ Body: { openai?: string; gemini?: string } }>("/api/v1/settings/models", async (request, reply) => {
     if (!(models instanceof ModelRouter)) return reply.code(409).send({ error: "runtime_model_configuration_unavailable" });
@@ -116,6 +123,18 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     try { models.setModelSelection(selection); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
     store.setSetting("models.selection", selection);
     return { models: { selection, choices: modelChoices } };
+  });
+  app.post<{ Body: { enabled?: boolean; cloudFallback?: boolean } }>("/api/v1/settings/local-mt", async (request, reply) => {
+    if (!localMt.configure || !localMt.settings) return reply.code(409).send({ error: "runtime_local_mt_configuration_unavailable" });
+    const current = localMt.settings();
+    const settings = { enabled: request.body?.enabled ?? current.enabled, cloudFallback: request.body?.cloudFallback ?? current.cloudFallback };
+    localMt.configure(settings); await localMt.refresh?.(); store.setSetting("local_mt.settings", settings);
+    return { localMt: { ...settings, status: await localMt.status?.() } };
+  });
+  app.post<{ Params: { key: string } }>("/api/v1/settings/local-mt/models/:key/install", async (request, reply) => {
+    if (!localMt.install) return reply.code(409).send({ error: "runtime_local_mt_installation_unavailable" });
+    try { await localMt.install(request.params.key); return reply.code(201).send({ localMt: { ...(localMt.settings?.() ?? localMtSettings), status: await localMt.status?.() } }); }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.post<{ Body: { apiKey?: string } }>("/api/v1/settings/anki-api-key", async (request, reply) => {
     const apiKey = request.body?.apiKey?.trim();
@@ -169,6 +188,21 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const job = store.getJob(request.params.id); return job?.packageId === activePackageId ? job : reply.code(404).send({ error: "unknown_job" });
   });
   app.get("/api/v1/quarantine", async () => store.listQuarantine(activePackageId));
+  app.post<{ Body: LexiconLookupRequest }>("/api/v1/lexicon/lookup", async (request, reply) => {
+    const pkg = active(); const body = request.body;
+    if (!body?.text?.trim() || !body?.surface?.trim()) return reply.code(400).send({ error: "text_and_surface_required" });
+    if (body.targetLanguageCode !== pkg.manifest.targetLanguage.code || body.sourceLanguageCode !== pkg.manifest.sourceLanguage.code) return reply.code(400).send({ error: "language_pair_mismatch" });
+    if (body.sessionId) { const session = store.getSession(body.sessionId); if (!session || session.packageId !== activePackageId) return reply.code(404).send({ error: "session_not_found" }); }
+    return lexicon().lookup(body);
+  });
+  app.post<{ Body: LexiconStagingRequest }>("/api/v1/lexicon/staging", async (request, reply) => {
+    const pkg = active(); const body = request.body;
+    if (!body?.surface?.trim() || !body?.lemma?.trim() || !body?.pos?.trim() || !body?.translation?.trim()) return reply.code(400).send({ error: "incomplete_lexicon_candidate" });
+    if (body.targetLanguageCode !== pkg.manifest.targetLanguage.code || body.sourceLanguageCode !== pkg.manifest.sourceLanguage.code) return reply.code(400).send({ error: "language_pair_mismatch" });
+    if (body.sessionId) { const session = store.getSession(body.sessionId); if (!session || session.packageId !== activePackageId) return reply.code(404).send({ error: "session_not_found" }); }
+    const id = store.stageLexicon(activePackageId, { sessionId: body.sessionId, languageCode: body.targetLanguageCode, sourceLanguageCode: body.sourceLanguageCode, surface: body.surface, lemma: body.lemma, pos: body.pos, translation: body.translation, context: body.context, payload: body });
+    return reply.code(201).send({ id, status: "pending" });
+  });
   app.get("/api/v1/export.jsonl", async (_request, reply) => reply.type("application/x-ndjson; charset=utf-8").send(store.exportJsonl()));
   app.get("/api/v1/integrations/anki/status", async () => anki.metrics());
   app.post("/api/v1/integrations/anki/setup/preview", async (_request, reply) => { try { return await anki.setupPreview(); } catch (error) { return reply.code(503).send({ error: error instanceof Error ? error.message : String(error) }); } });

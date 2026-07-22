@@ -1,6 +1,13 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+type CapacitorWindow = Window & { Capacitor?: { isNativePlatform?: () => boolean } };
+
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "");
+const nativeApp = typeof window !== "undefined" && Boolean((window as CapacitorWindow).Capacitor?.isNativePlatform?.());
+// The desktop dev server proxies this relative path. A native build must name its
+// HTTPS backend explicitly; otherwise it would accidentally call the WebView host.
+export const API_BASE = configuredApiBase ?? (nativeApp ? "" : "/api/v1");
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!API_BASE) throw new Error("Diese Android-App benötigt eine konfigurierte HTTPS-API (VITE_API_BASE_URL).");
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...(!(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...init?.headers } });
   const raw = await response.text();
   let body: Record<string, unknown> | undefined;

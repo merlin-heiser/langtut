@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { Job, ModuleStatus, SessionPlan } from "@langtut/contracts";
@@ -266,8 +267,110 @@ export class Store {
       .map((row: any) => ({ ...row, issues: JSON.parse(row.issues), payload: JSON.parse(row.payload) }));
   }
 
+  lookupLexicon(surface: string, targetLanguageCode: string, sourceLanguageCode: string): LexiconLookupRow[] {
+    const normalized = normalizeLexiconText(surface);
+    const rows = this.db.prepare(`
+      SELECT DISTINCT s.id AS sense_id,s.lemma,s.pos,s.gloss,s.concept_id,s.frequency_rank,s.provenance_json,
+        f.morphology_json,t.translation,t.origin,t.status AS translation_status,t.confidence
+      FROM lexicon_senses s
+      LEFT JOIN lexicon_forms f ON f.sense_id=s.id AND f.normalized_form=?
+      LEFT JOIN translation_cache t ON t.sense_id=s.id AND t.language_code=? AND t.status!='rejected'
+      WHERE s.language_code=? AND s.quality_status='approved'
+        AND (s.normalized_lemma=? OR f.normalized_form=?)
+      ORDER BY CASE WHEN s.normalized_lemma=? THEN 0 ELSE 1 END, COALESCE(s.frequency_rank,2147483647),s.id
+      LIMIT 12`).all(normalized, sourceLanguageCode, targetLanguageCode, normalized, normalized, normalized) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      senseId: String(row.sense_id), lemma: String(row.lemma), pos: String(row.pos),
+      gloss: row.gloss ? String(row.gloss) : undefined, conceptId: row.concept_id ? String(row.concept_id) : undefined,
+      frequencyRank: row.frequency_rank == null ? undefined : Number(row.frequency_rank),
+      morphology: JSON.parse(String(row.morphology_json ?? "{}")) as Record<string, unknown>,
+      translation: row.translation ? String(row.translation) : undefined,
+      origin: row.origin ? String(row.origin) as LexiconLookupRow["origin"] : undefined,
+      translationStatus: row.translation_status ? String(row.translation_status) : undefined,
+      confidence: row.confidence == null ? undefined : Number(row.confidence),
+      provenance: JSON.parse(String(row.provenance_json ?? "{}")) as Record<string, unknown>,
+    }));
+  }
+
+  lexiconDrawPool(packageId: string, moduleId: string, targetLanguageCode: string, sourceLanguageCode: string): LexiconDrawRow[] {
+    const rows = this.db.prepare(`
+      SELECT s.id AS sense_id,s.lemma,s.pos,s.gloss,s.cefr,s.frequency,s.frequency_rank,s.provenance_json,
+        t.translation,t.example_target,t.example_source,t.notes,t.origin,t.status AS translation_status,t.confidence,
+        COALESCE(MAX(m.weight),0) AS mapping_weight,
+        GROUP_CONCAT(DISTINCT COALESCE(m.curriculum_tag,c.label)) AS category_tags
+      FROM lexicon_senses s
+      LEFT JOIN translation_cache t ON t.sense_id=s.id AND t.language_code=? AND t.status!='rejected'
+      LEFT JOIN sense_categories sc ON sc.sense_id=s.id
+      LEFT JOIN lexicon_categories c ON c.id=sc.category_id
+      LEFT JOIN module_category_mappings m ON m.category_id=sc.category_id AND m.package_id=? AND m.module_id=?
+      LEFT JOIN module_lexicon_selections selected ON selected.sense_id=s.id AND selected.package_id=?
+      WHERE s.language_code=? AND s.quality_status='approved' AND selected.sense_id IS NULL
+      GROUP BY s.id
+      ORDER BY CASE WHEN MAX(m.weight) IS NULL THEN 1 ELSE 0 END,COALESCE(s.frequency_rank,2147483647),s.id
+      LIMIT 2000`).all(sourceLanguageCode, packageId, moduleId, packageId, targetLanguageCode) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      senseId: String(row.sense_id), lemma: String(row.lemma), pos: String(row.pos), gloss: row.gloss ? String(row.gloss) : undefined,
+      cefr: row.cefr ? String(row.cefr) : undefined, frequency: row.frequency == null ? undefined : Number(row.frequency),
+      frequencyRank: row.frequency_rank == null ? undefined : Number(row.frequency_rank), mappingWeight: Number(row.mapping_weight ?? 0),
+      categoryTags: String(row.category_tags ?? "").split(",").filter(Boolean), translation: row.translation ? String(row.translation) : undefined,
+      exampleTarget: row.example_target ? String(row.example_target) : undefined, exampleSource: row.example_source ? String(row.example_source) : undefined,
+      notes: row.notes ? String(row.notes) : undefined, origin: row.origin ? String(row.origin) as LexiconDrawRow["origin"] : undefined,
+      translationStatus: row.translation_status ? String(row.translation_status) : undefined,
+      confidence: row.confidence == null ? undefined : Number(row.confidence), provenance: JSON.parse(String(row.provenance_json ?? "{}")),
+      morphology: {},
+    }));
+  }
+
+  cacheLexiconTranslation(senseId: string, languageCode: string, value: { translation: string; exampleTarget?: string; exampleSource?: string; notes?: string; origin: "dictionary" | "concept" | "llm" | "local_mt" | "native"; status: "approved" | "pending_verification" | "rejected"; confidence: number; provider?: string; modelId?: string; modelRevision?: string; modelLicense?: string; sourceLanguageCode?: string; contextHash?: string; translationMode?: "direct" | "pivot" }): void {
+    this.db.prepare(`INSERT INTO translation_cache(sense_id,language_code,translation,example_target,example_source,notes,origin,status,confidence,updated_at,provider,model_id,model_revision,source_language_code,context_hash,translation_mode,model_license)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(sense_id,language_code) DO UPDATE SET translation=excluded.translation,
+      example_target=COALESCE(excluded.example_target,translation_cache.example_target),example_source=COALESCE(excluded.example_source,translation_cache.example_source),
+      notes=COALESCE(excluded.notes,translation_cache.notes),origin=excluded.origin,status=excluded.status,confidence=excluded.confidence,updated_at=excluded.updated_at,
+      provider=excluded.provider,model_id=excluded.model_id,model_revision=excluded.model_revision,source_language_code=excluded.source_language_code,context_hash=excluded.context_hash,translation_mode=excluded.translation_mode,model_license=excluded.model_license`)
+      .run(senseId, languageCode, value.translation, value.exampleTarget ?? null, value.exampleSource ?? null, value.notes ?? null, value.origin, value.status, value.confidence, new Date().toISOString(), value.provider ?? null, value.modelId ?? null, value.modelRevision ?? null, value.sourceLanguageCode ?? null, value.contextHash ?? null, value.translationMode ?? null, value.modelLicense ?? null);
+  }
+
+  listLocalMtInstallations(): Array<{ key: string; status: string; error?: string }> {
+    return (this.db.prepare("SELECT key,status,error FROM local_mt_installations ORDER BY key").all() as Array<{ key: string; status: string; error: string | null }>).map((row) => ({ key: row.key, status: row.status, ...(row.error ? { error: row.error } : {}) }));
+  }
+
+  saveLocalMtInstallation(model: { key: string; model_id: string; revision: string; license: string; size_bytes: number }, status: "not_installed" | "installing" | "installed" | "failed", installedPath?: string, error?: string): void {
+    this.db.prepare(`INSERT INTO local_mt_installations(key,model_id,revision,license,size_bytes,installed_path,status,error,updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(key) DO UPDATE SET model_id=excluded.model_id,revision=excluded.revision,license=excluded.license,size_bytes=excluded.size_bytes,
+      installed_path=COALESCE(excluded.installed_path,local_mt_installations.installed_path),status=excluded.status,error=excluded.error,updated_at=excluded.updated_at`)
+      .run(model.key, model.model_id, model.revision, model.license, model.size_bytes, installedPath ?? null, status, error ?? null, new Date().toISOString());
+  }
+
+  failInterruptedLocalMtInstallations(): void {
+    this.db.prepare("UPDATE local_mt_installations SET status='failed',error='Installation durch Neustart unterbrochen',updated_at=? WHERE status='installing'")
+      .run(new Date().toISOString());
+  }
+
+  setLexiconTranslationStatus(senseId: string, languageCode: string, status: "approved" | "pending_verification" | "rejected"): void {
+    this.db.prepare("UPDATE translation_cache SET status=?,updated_at=? WHERE sense_id=? AND language_code=?")
+      .run(status, new Date().toISOString(), senseId, languageCode);
+  }
+
+  saveLexiconSelection(packageId: string, moduleId: string, senseId: string, score: number, seed: string, reasons: string[], status = "selected"): void {
+    this.db.prepare(`INSERT INTO module_lexicon_selections(package_id,module_id,sense_id,score,seed,reasons_json,status,created_at)
+      VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(package_id,module_id,sense_id) DO UPDATE SET score=excluded.score,seed=excluded.seed,reasons_json=excluded.reasons_json,status=excluded.status`)
+      .run(packageId, moduleId, senseId, score, seed, JSON.stringify(reasons), status, new Date().toISOString());
+  }
+
+  setLexiconSelectionStatus(packageId: string, moduleId: string, senseId: string, status: "selected" | "materialized" | "imported" | "rejected"): void {
+    this.db.prepare("UPDATE module_lexicon_selections SET status=? WHERE package_id=? AND module_id=? AND sense_id=?")
+      .run(status, packageId, moduleId, senseId);
+  }
+
+  stageLexicon(packageId: string, input: { sessionId?: string; languageCode: string; sourceLanguageCode: string; surface: string; lemma: string; pos: string; translation: string; context?: string; payload: unknown }): string {
+    const id = `staging:${randomUUID()}`; const now = new Date().toISOString();
+    this.db.prepare(`INSERT INTO lexicon_staging(id,package_id,session_id,language_code,source_language_code,surface,lemma,pos,translation,context,payload_json,status,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, packageId, input.sessionId ?? null, input.languageCode, input.sourceLanguageCode, input.surface, input.lemma, input.pos, input.translation, input.context ?? null, JSON.stringify(input.payload), "pending", now, now);
+    return id;
+  }
+
   exportJsonl(): string {
-    const tables = ["module_progress", "session_plans", "sessions", "session_events", "placement_sessions", "jobs", "generated_items", "quarantine", "import_events", "api_usage_events"];
+    const tables = ["module_progress", "session_plans", "sessions", "session_events", "placement_sessions", "jobs", "generated_items", "quarantine", "import_events", "api_usage_events", "lexicon_sources", "lexicon_categories", "category_localizations", "module_category_mappings", "lexicon_senses", "lexicon_forms", "sense_categories", "translation_cache", "module_lexicon_selections", "lexicon_staging", "local_mt_installations"];
     const lines: string[] = [];
     for (const table of tables) {
       const rows = this.db.prepare(`SELECT * FROM ${table}`).all();
@@ -275,6 +378,21 @@ export class Store {
     }
     return `${lines.join("\n")}${lines.length ? "\n" : ""}`;
   }
+}
+
+export interface LexiconLookupRow {
+  senseId: string; lemma: string; pos: string; gloss?: string; conceptId?: string; frequencyRank?: number;
+  morphology: Record<string, unknown>; translation?: string; origin?: "dictionary" | "concept" | "llm" | "local_mt" | "native";
+  translationStatus?: string; confidence?: number; provenance: Record<string, unknown>;
+}
+
+export interface LexiconDrawRow extends LexiconLookupRow {
+  cefr?: string; frequency?: number; mappingWeight: number; categoryTags: string[];
+  exampleTarget?: string; exampleSource?: string; notes?: string;
+}
+
+function normalizeLexiconText(value: string): string {
+  return value.normalize("NFC").trim().toLocaleLowerCase().replace(/^[^\p{L}\p{M}\d]+|[^\p{L}\p{M}\d]+$/gu, "");
 }
 
 export interface ApiCostSummary {

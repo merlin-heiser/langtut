@@ -1,0 +1,29 @@
+version: "1.0"
+models:
+  - key: marian-en-de
+    family: marian
+    model_id: Helsinki-NLP/opus-mt-en-de
+    revision: 6183067f769a302e3861815543b9f312c71b0ca4
+    license: CC-BY-4.0
+    size_bytes: 300000000
+    source_languages: [en]
+    target_languages: [de]
+    priority: 100
+  - key: marian-de-en
+    family: marian
+    model_id: Helsinki-NLP/opus-mt-de-en
+    revision: 1a922f3b32a8e809e17a47d4b32142d8105924e5
+    license: Apache-2.0
+    size_bytes: 300000000
+    source_languages: [de]
+    target_languages: [en]
+    priority: 100
+  - key: m2m100-418m
+    family: m2m100
+    model_id: facebook/m2m100_418M
+    revision: 55c2e61bbf05dfb8d7abccdc3fae6fc8512fd636
+    license: MIT
+    size_bytes: 1940000000
+    source_languages: ["*"]
+    target_languages: ["*"]
+    priority: 10

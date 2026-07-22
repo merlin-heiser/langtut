@@ -10,3 +10,10 @@ data/rapports/
 *.log
 .vite/
 .playwright-cli/
+android/.gradle/
+android/app/build/
+android/build/
+android/keystore.properties
+android/local.properties
+android/*.jks
+android/*.keystore

@@ -3,16 +3,26 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "postinstall": "node scripts/link-local-workspaces.mjs",
     "predev": "node scripts/link-local-workspaces.mjs",
     "dev": "concurrently -n api,web -c cyan,magenta \"npm --prefix apps/api run dev\" \"node scripts/start-web-when-api-ready.mjs\"",
     "prebuild": "node scripts/link-local-workspaces.mjs",
     "build": "npm run generate && npm run build --workspaces --if-present",
+    "build:android": "node scripts/assert-android-api.mjs && npm run build",
+    "android:sync": "npm run build:android && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:debug": "npm run android:sync && cd android && gradlew.bat assembleDebug",
+    "android:debug:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android-local-debug.ps1",
+    "android:release": "npm run android:sync && cd android && gradlew.bat bundleRelease",
     "generate": "node scripts/generate-contracts.mjs",
     "spec:lint": "node scripts/validate-specs.mjs",
     "package:validate": "node scripts/validate-package.mjs",
+    "lexicon:import": "node scripts/import-lexicon.mjs",
     "pretest": "node scripts/link-local-workspaces.mjs",
     "test": "npm run generate && vitest run",
     "test:watch": "vitest",
@@ -22,6 +32,7 @@
     "check": "npm run spec:lint && npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
     "@types/node": "latest",
     "concurrently": "9.2.4",
     "json-schema-to-typescript": "latest",
@@ -29,11 +40,17 @@
     "vitest": "latest",
     "yaml": "latest"
   },
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "allowScripts": {
     "esbuild": true,
     "better-sqlite3@12.11.1": true,
     "protobufjs@7.6.5": true,
     "@google/genai@2.12.0": true
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2"
   }
 }

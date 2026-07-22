@@ -6,6 +6,8 @@ import { deriveModuleStatus, isNearDuplicate, normalizeTarget, renderPackageProm
 import type { Store } from "./database.js";
 import type { AnkiGateway } from "./anki.js";
 import type { ModelGateway } from "./providers.js";
+import { LexiconService } from "./lexicon.js";
+import type { LocalMtGateway } from "./local-mt.js";
 
 interface ImportResult {
   generated: number;
@@ -20,13 +22,15 @@ const VOCAB_GENERATION_BATCH_SIZE = 40;
 const VOCAB_ALTERNATIVE_BUFFER = 8;
 
 export class ContentPipeline {
+  private readonly lexicon: LexiconService;
   constructor(
     private readonly store: Store,
     private readonly anki: AnkiGateway,
     private readonly models: ModelGateway,
     private readonly pkg: LoadedLearningPackage,
     private readonly diagnosticPath?: string,
-  ) {}
+    localMt?: LocalMtGateway,
+  ) { this.lexicon = new LexiconService(store, models, pkg, localMt); }
 
   start(module: CurriculumModule): Job {
     const now = new Date().toISOString();
@@ -55,6 +59,18 @@ export class ContentPipeline {
     if (nativeItems.length) await this.verifyAndImport(module, nativeItems);
     let importedVocab = this.store.countItems(this.pkg.manifest.id, module.id, "vocab");
     const preparationMinimum = vocabPreparationMinimum(module);
+    const libraryMissing = Math.max(0, preparationMinimum - importedVocab);
+    if (libraryMissing) {
+      const seed = `${this.pkg.manifest.id}:${this.pkg.curriculum.version}:${module.id}`;
+      const libraryItems = await this.lexicon.materializeForModule(module, libraryMissing, seed);
+      if (libraryItems.length) {
+        await this.log({ event: "library_draw_started", jobId, moduleId: module.id, requested: libraryMissing, selected: libraryItems.length, seed });
+        const libraryResult = await this.verifyAndImport(module, libraryItems, libraryMissing);
+        importedVocab += libraryResult.imported;
+        await this.log({ event: "library_draw_finished", jobId, moduleId: module.id, ...libraryResult, importedTotal: importedVocab, seed });
+        this.store.updateJob(jobId, { progress: Math.min(0.7, importedVocab / Math.max(1, preparationMinimum) * 0.7), message: `${importedVocab}/${preparationMinimum} Vokabeln aus Bibliothek und Paket importiert` });
+      }
+    }
     const initiallyMissing = Math.max(0, preparationMinimum - importedVocab);
     const maxBatches = Math.ceil(initiallyMissing / VOCAB_GENERATION_BATCH_SIZE) + 2;
     let batchesExecuted = 0;
@@ -128,6 +144,7 @@ export class ContentPipeline {
       if (item.kind === "rule" && !module.grammarMilestones.some(({ id }) => id === item.milestoneId)) issues.push("unknown_milestone");
       if (seen.some((front) => isNearDuplicate(front, item.target))) issues.push("duplicate_or_near_duplicate");
       if (issues.length) {
+        this.lexicon.markMaterialization(item.itemId, module.id, "rejected", false);
         deterministicRejected++;
         for (const issue of issues) issuesByName[issue] = (issuesByName[issue] ?? 0) + 1;
         this.store.quarantine(this.pkg.manifest.id, item, item, issues);
@@ -150,11 +167,13 @@ ${roleRubric} Lehne außerdem bei Fehlern, Irreführung, unnatürlicher Sprache 
     const approved = clean.filter((item) => {
       const result = decision.get(item.itemId);
       if (!result?.approved) {
+        this.lexicon.markMaterialization(item.itemId, module.id, "rejected");
         semanticRejected++;
         const issues = result?.issues ?? ["missing_verification"];
         for (const issue of issues) issuesByName[issue] = (issuesByName[issue] ?? 0) + 1;
         this.store.quarantine(this.pkg.manifest.id, item, item, issues);
       }
+      else this.lexicon.markMaterialization(item.itemId, module.id, "materialized");
       return result?.approved;
     });
     const selected = approved.slice(0, importLimit);
@@ -167,10 +186,12 @@ ${roleRubric} Lehne außerdem bei Fehlern, Irreführung, unnatürlicher Sprache 
       if (noteId) {
         this.store.saveGenerated(this.pkg.manifest.id, { itemId: item.itemId, moduleId: item.moduleId, kind: item.kind, normalized: normalizeTarget(item.target), payload: item }, "imported", noteId);
         imported++;
+        this.lexicon.markMaterialization(item.itemId, module.id, "imported");
       } else {
         ankiRejected++;
         issuesByName.anki_rejected_note = (issuesByName.anki_rejected_note ?? 0) + 1;
         this.store.quarantine(this.pkg.manifest.id, item, item, ["anki_rejected_note"]);
+        this.lexicon.markMaterialization(item.itemId, module.id, "rejected", false);
       }
     });
     return { generated: items.length, deterministicRejected, semanticRejected, ankiRejected, imported, issues: issuesByName };

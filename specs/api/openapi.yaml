@@ -49,6 +49,28 @@ paths:
       operationId: getStatus
       responses:
         '200': { description: Systemstatus }
+  /settings/local-mt:
+    post:
+      operationId: configureLocalMachineTranslation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                cloudFallback: { type: boolean }
+      responses:
+        '200': { description: Lokale Übersetzungseinstellungen gespeichert }
+  /settings/local-mt/models/{key}/install:
+    post:
+      operationId: installLocalMachineTranslationModel
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Revisionsgepinntes Modell installiert }
+        '400': { description: Laufzeit, Download oder Modell ungültig }
   /costs/summary:
     get:
       operationId: getApiCostSummary
@@ -203,6 +225,30 @@ paths:
       operationId: getQuarantine
       responses:
         '200': { description: Ungeklärte Inhalte }
+  /lexicon/lookup:
+    post:
+      operationId: lookupLexicon
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '../schemas/contracts.schema.json#/definitions/LexiconLookupRequest' }
+      responses:
+        '200':
+          description: Lokaler oder kontextuell aufgelöster Wörterbuchtreffer
+          content:
+            application/json:
+              schema: { $ref: '../schemas/contracts.schema.json#/definitions/LexiconLookupResult' }
+  /lexicon/staging:
+    post:
+      operationId: stageLexiconCandidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '../schemas/contracts.schema.json#/definitions/LexiconStagingRequest' }
+      responses:
+        '201': { description: Eintrag zur Qualitätsprüfung vorgemerkt }
   /export.jsonl:
     get:
       operationId: exportPortableLog

@@ -39,6 +39,20 @@ npm run package:validate -- examples/english-norwegian
 
 Mitgelieferte Vokabeln werden zuerst importiert; das LLM ergänzt nur bis zum Ziel des Moduls. Prompts überschreiben einzelne bekannte Aufgaben, alle übrigen kommen aus der Standardbibliothek.
 
+## Vokabelbibliothek
+
+Eine lokale, sprachunabhängig kategorisierte Vokabelbibliothek kann den größten Teil der freien Batch-Generierung ersetzen. Kategorien werden einmal auf die Modulkategorien abgebildet; Übersetzungen und Beispiele entstehen erst für tatsächlich gezogene Einträge und werden danach wiederverwendet.
+
+Nach dem ersten Start der API kann ein vorbereitetes JSONL-Katalogartefakt idempotent importiert werden:
+
+```powershell
+npm run lexicon:import -- data/langtut.sqlite path/to/catalog.jsonl
+```
+
+Quellen mit nicht weiterverteilbarer Lizenz werden standardmäßig abgelehnt und können nur für eine ausdrücklich lokale Nutzung mit `--allow-local-restricted` importiert werden. Format, Statusmodell und Auswahlreihenfolge sind in `specs/features/lexicon.md` beschrieben.
+
+Optional kann die Übersetzung unbekannter Katalogeinträge lokal erfolgen. Die Einstellungen bieten revisionsgepinnte Marian-Modelle sowie M2M100-418M als universellen Fallback an; Gewichte werden nie automatisch mitgeladen. Der separate Worker benötigt eine Python-Umgebung mit `transformers`, `torch`, `sentencepiece` und `huggingface_hub`. Über `LANGTUT_PYTHON` kann deren Interpreter gewählt werden.
+
 Abgeschlossene Konversationssessions aktualisieren pro Lernpaket ein lokales Lernrapport unter `data/rapports/<paket-id>/rapport.md`. Es enthält eine knappe, quellenfreie Zusammenfassung beobachteter Interessen, Stärken, Schwierigkeiten und hilfreicher Unterstützung und wird für kommende Tutorzüge relevanzgefiltert verwendet.
 
 ## Verbindliche Quellen

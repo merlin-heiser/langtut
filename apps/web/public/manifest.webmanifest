@@ -1,0 +1,9 @@
+{
+  "name": "Langtut",
+  "short_name": "Langtut",
+  "description": "Lernpaket-Player für personalisiertes Sprachenlernen.",
+  "display": "standalone",
+  "start_url": "./",
+  "background_color": "#f3f0e8",
+  "theme_color": "#163d34"
+}

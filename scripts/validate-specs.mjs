@@ -10,9 +10,19 @@ const openapi = YAML.parse(await readFile(path.join(root, "specs/api/openapi.yam
 const contracts = JSON.parse(await readFile(path.join(root, "specs/schemas/contracts.schema.json"), "utf8"));
 const modelTasks = YAML.parse(await readFile(path.join(root, "config/model_tasks.yaml"), "utf8"));
 const modelPricing = YAML.parse(await readFile(path.join(root, "config/model_pricing.yaml"), "utf8"));
+const localMt = YAML.parse(await readFile(path.join(root, "config/local_mt.yaml"), "utf8"));
 const ids = new Set(road.modules.map((module) => module.id));
 const allowedTags = new Set(Object.values(tags.categories).flat());
 const failures = [];
+const localMtKeys = new Set();
+for (const model of localMt.models ?? []) {
+  if (localMtKeys.has(model.key)) failures.push(`local MT model key duplicated: ${model.key}`); else localMtKeys.add(model.key);
+  if (!["marian", "m2m100"].includes(model.family)) failures.push(`${model.key}: unsupported local MT family`);
+  if (!/^[a-f0-9]{40}$/.test(model.revision ?? "")) failures.push(`${model.key}: local MT revision must be pinned to a commit`);
+  if (!model.license || !Number.isFinite(model.size_bytes) || model.size_bytes <= 0 || !Number.isFinite(model.priority)) failures.push(`${model.key}: incomplete local MT metadata`);
+  if (!(model.source_languages?.length && model.target_languages?.length)) failures.push(`${model.key}: local MT language directions missing`);
+  if (/nllb|madlad/i.test(model.model_id ?? "")) failures.push(`${model.key}: restricted or oversized model must not be a default`);
+}
 if (road.modules.length !== 23) failures.push(`expected 23 modules, got ${road.modules.length}`);
 const total = road.modules.reduce((sum, module) => sum + module.vocab_target, 0);
 if (total !== 2000) failures.push(`expected vocabulary target 2000, got ${total}`);

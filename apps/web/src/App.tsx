@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Curriculum, CurriculumModule, Job, SessionPlan } from "@langtut/contracts";
+import type { Curriculum, CurriculumModule, Job, LexiconLookupResult, LexiconSenseCandidate, SessionPlan } from "@langtut/contracts";
 import { api, post, uploadPackage } from "./api.js";
 
 type Status = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
@@ -8,7 +8,9 @@ type Placement = { id: string; status: string; itemsAnswered: number; maxItems: 
 type TutorTurn = { message: string; correction: string; explanation: string; newExample: string; errorTags: string[]; targetLanguageUse: "target" | "mixed" | "source"; goalProgress: "met" | "partial" | "not_met"; conversationState: "continue" | "closing" | "completed" };
 type TutorReport = { focusTags: string[]; observedErrors: string[]; observedStrengths: string[]; languageSwitches: number; goalCompletionPercent: number; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
 type ApiCostSummary = { currency: "USD"; weekCost: number; totalCost: number; weekInputTokens: number; weekOutputTokens: number; totalInputTokens: number; totalOutputTokens: number; weekStartedAt: string; trackedSince: string | null; pricingVersion: string };
-type Settings = { anki: { configured: boolean }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } } };
+type LocalMtModelStatus = { key: string; family: string; modelId: string; revision: string; license: string; sizeBytes: number; sourceLanguages: string[]; targetLanguages: string[]; priority: number; status: string; error?: string };
+type LocalMtSettings = { enabled: boolean; cloudFallback: boolean; status?: { runtime?: { available: boolean; error?: string }; models?: LocalMtModelStatus[] } };
+type Settings = { anki: { configured: boolean }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } }; localMt: LocalMtSettings };
 type ModelSettingsResponse = Pick<Settings, "models">;
 type LearningPackage = { id: string; version: string; name: string; targetLanguage: { code: string; name: string }; sourceLanguage: { code: string; name: string }; active: boolean; modules: number; progress: { started: number; completed: number; total: number }; capabilities: { placement: boolean; nativeVocabulary: boolean; customPrompts: boolean; activities: boolean } };
 type PackageShelf = { activePackageId: string; packages: LearningPackage[] };
@@ -40,6 +42,8 @@ export function App() {
   const [savingKey, setSavingKey] = useState(false);
   const [settings, setSettings] = useState<Settings>();
   const [savingModels, setSavingModels] = useState(false);
+  const [savingLocalMt, setSavingLocalMt] = useState(false);
+  const [installingLocalMt, setInstallingLocalMt] = useState<string>();
   const [packageShelf, setPackageShelf] = useState<PackageShelf>();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [activityId, setActivityId] = useState<string>();
@@ -154,6 +158,24 @@ export function App() {
     } catch (error) { handleError(error); } finally { setSavingModels(false); }
   }
 
+  async function saveLocalMt(selection: Pick<LocalMtSettings, "enabled" | "cloudFallback">) {
+    setSavingLocalMt(true);
+    try {
+      const result = await post<{ localMt: LocalMtSettings }>("/settings/local-mt", selection);
+      if (settings) setSettings({ ...settings, localMt: result.localMt });
+      setNotice("Lokale Übersetzungseinstellungen gespeichert.");
+    } catch (error) { handleError(error); } finally { setSavingLocalMt(false); }
+  }
+
+  async function installLocalMt(key: string) {
+    setInstallingLocalMt(key);
+    try {
+      const result = await post<{ localMt: LocalMtSettings }>(`/settings/local-mt/models/${key}/install`);
+      if (settings) setSettings({ ...settings, localMt: result.localMt });
+      setNotice("Lokales Übersetzungsmodell installiert.");
+    } catch (error) { handleError(error); } finally { setInstallingLocalMt(undefined); }
+  }
+
   async function activatePackage(id: string) {
     try { await post(`/packages/${id}/activate`); setPlan(undefined); setSession(undefined); setTurns([]); setReport(undefined); setPlacement(undefined); await reload(); }
     catch (error) { handleError(error); }
@@ -174,7 +196,7 @@ export function App() {
 
     {notice && <aside className="notice">{notice}</aside>}
 
-    {screen === "settings" && <section className="settings-page"><div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div><article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article><article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert. Für eine getrennte Wahl pro Aufgabe können wir später ein feineres Profil ergänzen.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article></section>}
+    {screen === "settings" && <section className="settings-page"><div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div><article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article><article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert. Für eine getrennte Wahl pro Aufgabe können wir später ein feineres Profil ergänzen.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article>{settings?.localMt && <LocalMtSettingsCard value={settings.localMt} saving={savingLocalMt} installing={installingLocalMt} onChange={(localMt) => setSettings({ ...settings, localMt })} onSave={saveLocalMt} onInstall={installLocalMt} />}</section>}
 
     {screen === "dashboard" && <><section className="package-shelf">
       <div className="section-title"><span>00</span><h2>Paketablage</h2></div>
@@ -222,11 +244,11 @@ export function App() {
       {session && <article className="tutor">
         {session.activity?.type === "roleplay" && <div className="scenario"><small>ROLLENSPIEL</small><h3>{session.activity.title}</h3><p lang={activePackage?.targetLanguage.code}>{session.activity.scenarioTarget}</p><details><summary>Deutsche Erklärung anzeigen</summary><p lang={activePackage?.sourceLanguage.code}>{session.activity.scenarioSource}</p></details></div>}
         <div className="dialogue" aria-busy={sending}>
-          {session.initialTurns?.map((response) => <PartnerMessage response={response} key={response.roleId} />)}
+          {session.initialTurns?.map((response) => <PartnerMessage response={response} sessionId={session.id} targetLanguageCode={activePackage?.targetLanguage.code} sourceLanguageCode={activePackage?.sourceLanguage.code} key={response.roleId} />)}
           {turns.length === 0 && !(session.initialTurns?.length) && <p className="empty">Schreibe deinen ersten Satz auf {activePackage?.targetLanguage.name ?? "der Zielsprache"}.</p>}
           {turns.map((turn) => <div className="turn-stack" key={turn.id}>
             <LearnerMessage message={turn.learner} responses={turn.responses} />
-            {turn.status === "pending" ? <TypingIndicator /> : turn.responses.map((response) => <PartnerMessage response={response} key={response.roleId} />)}
+            {turn.status === "pending" ? <TypingIndicator /> : turn.responses.map((response) => <PartnerMessage response={response} sessionId={session.id} targetLanguageCode={activePackage?.targetLanguage.code} sourceLanguageCode={activePackage?.sourceLanguage.code} key={response.roleId} />)}
           </div>)}
         </div>
         {session.status === "active" ? <>
@@ -251,8 +273,38 @@ export function App() {
   </main>;
 }
 
-function PartnerMessage({ response }: { response: ActivityTurn }) {
-  return <div className="message-row partner-row"><small className="message-label">{response.roleLabel}</small><div className="message-bubble partner-bubble">{response.turn.message}</div></div>;
+function LocalMtSettingsCard({ value, saving, installing, onChange, onSave, onInstall }: {
+  value: LocalMtSettings; saving: boolean; installing?: string;
+  onChange: (value: LocalMtSettings) => void;
+  onSave: (value: Pick<LocalMtSettings, "enabled" | "cloudFallback">) => Promise<void>;
+  onInstall: (key: string) => Promise<void>;
+}) {
+  const runtime = value.status?.runtime;
+  return <article className="settings-card local-mt-settings"><div><small>LOKALE ÜBERSETZUNG</small><h3>Weniger API-Aufrufe</h3><p>Installierte Modelle übersetzen ausgewählte Wörter lokal. Ergebnisse bleiben bis zur bestehenden Qualitätsprüfung als ungeprüft markiert.</p><p className={runtime?.available ? "runtime-ok" : "runtime-warning"}>{runtime?.available ? "Python-Laufzeit bereit" : runtime?.error ?? "Laufzeitstatus unbekannt"}</p></div><div className="settings-form"><label className="toggle-row"><input type="checkbox" checked={value.enabled} onChange={(event) => onChange({ ...value, enabled: event.target.checked })} />Lokale Übersetzung aktivieren</label><label className="toggle-row"><input type="checkbox" checked={value.cloudFallback} onChange={(event) => onChange({ ...value, cloudFallback: event.target.checked })} />Cloud-Fallback bei fehlendem oder fehlerhaftem Modell</label><button className="primary" disabled={saving} onClick={() => onSave(value)}>{saving ? "Speichert …" : "Einstellung speichern"}</button><div className="local-model-list">{value.status?.models?.map((model) => <div className="local-model" key={model.key}><div><b>{model.key}</b><small>{model.family} · {formatBytes(model.sizeBytes)} · {model.license}</small><small>{model.sourceLanguages.join(", ")} → {model.targetLanguages.join(", ")} · Revision {model.revision.slice(0, 8)}</small>{model.error && <small className="runtime-warning">{model.error}</small>}</div><button disabled={model.status === "installed" || installing === model.key || !runtime?.available} onClick={() => onInstall(model.key)}>{model.status === "installed" ? "Installiert" : installing === model.key ? "Installiert …" : "Installieren"}</button></div>)}</div></div></article>;
+}
+
+function PartnerMessage({ response, sessionId, targetLanguageCode, sourceLanguageCode }: { response: ActivityTurn; sessionId: string; targetLanguageCode?: string; sourceLanguageCode?: string }) {
+  const [lookup, setLookup] = useState<{ surface: string; result?: LexiconLookupResult; loading?: boolean; saved?: boolean }>();
+  const segments = segmentWords(response.turn.message, targetLanguageCode);
+  async function inspect(surface: string) {
+    if (!targetLanguageCode || !sourceLanguageCode) return;
+    setLookup({ surface, loading: true });
+    try {
+      const result = await post<LexiconLookupResult>("/lexicon/lookup", { text: response.turn.message, surface, targetLanguageCode, sourceLanguageCode, sessionId });
+      setLookup({ surface, result });
+    } catch { setLookup({ surface, result: { status: "not_found", surface, candidates: [] } }); }
+  }
+  async function remember(candidate: LexiconSenseCandidate) {
+    if (!targetLanguageCode || !sourceLanguageCode || !lookup) return;
+    await post("/lexicon/staging", { sessionId, senseId: candidate.senseId, surface: lookup.surface, lemma: candidate.lemma, pos: candidate.pos, translation: candidate.translation, context: response.turn.message, targetLanguageCode, sourceLanguageCode, origin: candidate.origin });
+    setLookup({ ...lookup, saved: true });
+  }
+  return <div className="message-row partner-row"><small className="message-label">{response.roleLabel}</small><div className="message-bubble partner-bubble lookup-bubble">{segments.map((segment) => segment.isWord ? <button className="lookup-word" key={segment.index} onClick={() => void inspect(segment.text)}>{segment.text}</button> : <span key={segment.index}>{segment.text}</span>)}</div>{lookup && <div className="lexicon-popover" role="status"><button className="lookup-close" aria-label="Wörterbuch schließen" onClick={() => setLookup(undefined)}>×</button><small>WÖRTERBUCH · {lookup.result?.status === "ai_resolved" ? "KI-KONTEXTAUFLÖSUNG" : lookup.result?.status === "local_mt_candidate" ? "LOKALE MT · UNGEPRÜFT" : "LOKAL"}</small><b>{lookup.surface}</b>{lookup.loading ? <p>Wird nachgeschlagen …</p> : lookup.result?.candidates.length ? lookup.result.candidates.map((candidate) => <div className="lexicon-candidate" key={candidate.senseId ?? `${candidate.lemma}:${candidate.translation}`}><p><strong>{candidate.lemma}</strong> <span>{candidate.pos}</span><br />{candidate.translation}</p>{candidate.gloss && <p className="lexicon-gloss">{candidate.gloss}</p>}<button disabled={lookup.saved} onClick={() => void remember(candidate)}>{lookup.saved ? "Vorgemerkt" : "Merken"}</button></div>) : <p>Kein sicherer Treffer gefunden.</p>}</div>}</div>;
+}
+
+function segmentWords(text: string, language?: string): Array<{ text: string; index: number; isWord: boolean }> {
+  if (typeof Intl.Segmenter === "function") return [...new Intl.Segmenter(language, { granularity: "word" }).segment(text)].map((segment) => ({ text: segment.segment, index: segment.index, isWord: Boolean(segment.isWordLike) }));
+  return [...text.matchAll(/[\p{L}\p{M}\d]+|[^\p{L}\p{M}\d]+/gu)].map((match) => ({ text: match[0], index: match.index, isWord: /^[\p{L}\p{M}\d]/u.test(match[0]) }));
 }
 
 function TypingIndicator() {
@@ -294,4 +346,8 @@ function setupActionLabel(action: string) {
 function formatUsd(value?: number) {
   if (value === undefined) return "–";
   return new Intl.NumberFormat("de-DE", { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(value);
+}
+
+function formatBytes(value: number) {
+  return `${(value / 1_000_000_000).toLocaleString("de-DE", { maximumFractionDigits: 2 })} GB`;
 }
