@@ -30,6 +30,11 @@ existiert für Geräte-Deployment. Bis die lokale Android-Lernruntime fertig ist
 die bestehende Android-Oberfläche weiterhin eine explizit konfigurierte API; sie darf
 nicht als autonomer Offline-Client beschrieben werden.
 
+Google-OAuth-JSON-Dateien dürfen auf Windows und Android importiert werden. Die
+Oberfläche extrahiert die Client-ID und, falls für den Desktop-Token-Tausch nötig, das
+Client-Secret. Das Secret bleibt ausschließlich in der lokalen API-Konfiguration und
+wird weder in Android-Artefakte noch in Drive-Ereignisse oder Logs übernommen.
+
 Abgeschlossene oder aktive Placements werden nach einem Neuladen aus SQLite
 wiederhergestellt. „Modul vorbereiten“ autorisiert zugleich die sichere Einrichtung
 fehlender app-eigener Anki-Modelle. Fremde gleichnamige Modelle bleiben geschützt.

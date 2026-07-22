@@ -1,5 +1,7 @@
 package de.langtut.app;
 
+import android.accounts.Account;
+import android.accounts.AccountManager;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -9,39 +11,32 @@ import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.google.android.gms.auth.GoogleAuthUtil;
 import com.google.android.gms.auth.UserRecoverableAuthException;
-import com.google.android.gms.auth.api.signin.GoogleSignIn;
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
-import com.google.android.gms.auth.api.signin.GoogleSignInClient;
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
-import com.google.android.gms.common.api.ApiException;
-import com.google.android.gms.common.api.Scope;
-import com.google.android.gms.tasks.Task;
+import android.content.Intent;
 
 /** Android system-browser/account-picker OAuth for Langtut's private Drive app-data scope. */
 @CapacitorPlugin(name = "GoogleDriveBridge")
 public class GoogleDriveBridgePlugin extends Plugin {
   private static final String DRIVE_APPDATA_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
-  private GoogleSignInClient client() {
-    GoogleSignInOptions options = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-      .requestEmail().requestScopes(new Scope(DRIVE_APPDATA_SCOPE)).build();
-    return GoogleSignIn.getClient(getActivity(), options);
+  @PluginMethod public void signIn(PluginCall call) {
+    Intent intent = AccountManager.get(getContext()).newChooseAccountIntent(
+      null, null, new String[] { "com.google" }, null, null, null, null);
+    startActivityForResult(call, intent, "receiveGoogleAccount");
   }
-  @PluginMethod public void signIn(PluginCall call) { startActivityForResult(call, client().getSignInIntent(), "receiveGoogleSignIn"); }
-  @ActivityCallback private void receiveGoogleSignIn(PluginCall call, ActivityResult result) {
+  @ActivityCallback private void receiveGoogleAccount(PluginCall call, ActivityResult result) {
     if (call == null) return;
-    try {
-      Task<GoogleSignInAccount> task = GoogleSignIn.getSignedInAccountFromIntent(result.getData());
-      GoogleSignInAccount account = task.getResult(ApiException.class);
-      if (account == null || account.getAccount() == null) { call.reject("Google account unavailable"); return; }
-      new Thread(() -> {
-        try {
-          String token = GoogleAuthUtil.getToken(getContext(), account.getAccount(), "oauth2:" + DRIVE_APPDATA_SCOPE);
-          JSObject response = new JSObject(); response.put("accessToken", token); response.put("email", account.getEmail()); call.resolve(response);
-        } catch (UserRecoverableAuthException recoverable) {
-          call.reject("Google authorization needs user confirmation", "google_auth_recovery_required");
-        } catch (Exception error) { call.reject(error.getMessage(), error); }
-      }).start();
-    } catch (ApiException error) { call.reject("Google sign-in failed: " + error.getStatusCode(), error); }
+    String accountName = result.getData() == null ? null : result.getData().getStringExtra(AccountManager.KEY_ACCOUNT_NAME);
+    if (accountName == null || accountName.isBlank()) { call.reject("Google account unavailable"); return; }
+    fetchDriveToken(call, new Account(accountName, "com.google"));
   }
-  @PluginMethod public void disconnect(PluginCall call) { client().signOut().addOnCompleteListener(task -> call.resolve()); }
+  private void fetchDriveToken(PluginCall call, Account account) {
+    new Thread(() -> {
+      try {
+        String token = GoogleAuthUtil.getToken(getContext(), account, "oauth2:" + DRIVE_APPDATA_SCOPE);
+        JSObject response = new JSObject(); response.put("accessToken", token); response.put("email", account.name); call.resolve(response);
+      } catch (UserRecoverableAuthException recoverable) {
+        call.reject("Google authorization needs user confirmation", "google_auth_recovery_required");
+      } catch (Exception error) { call.reject(error.getMessage(), error); }
+    }).start();
+  }
+  @PluginMethod public void disconnect(PluginCall call) { call.resolve(); }
 }

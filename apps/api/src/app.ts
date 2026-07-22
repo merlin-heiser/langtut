@@ -120,10 +120,13 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     sync: { ...driveSync.status(), googleOAuthClientId: store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId },
   }));
   app.get("/api/v1/sync/status", async () => driveSync.status());
-  app.post<{ Body: { clientId?: string } }>("/api/v1/sync/google/client", async (request, reply) => {
+  app.post<{ Body: { clientId?: string; clientSecret?: string } }>("/api/v1/sync/google/client", async (request, reply) => {
     const clientId = request.body?.clientId?.trim();
     if (!clientId?.endsWith(".apps.googleusercontent.com")) return reply.code(400).send({ error: "google_oauth_client_id_required" });
-    store.setSetting("google_drive.oauth_client_id", clientId); return { googleOAuthClientId: clientId };
+    store.setSetting("google_drive.oauth_client_id", clientId);
+    const clientSecret = request.body?.clientSecret?.trim();
+    if (clientSecret) store.setSetting("google_drive.oauth_client_secret", clientSecret);
+    return { googleOAuthClientId: clientId };
   });
   app.get("/api/v1/sync/google/authorize", async (_request, reply) => {
     const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
@@ -139,7 +142,9 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const pending = store.getSetting<{ state: string; verifier: string; redirectUri: string }>("google_drive.oauth_pending");
     if (request.query.error || !request.query.code || !pending || request.query.state !== pending.state) return reply.code(400).type("text/html").send("<h1>Google-Anmeldung fehlgeschlagen</h1><p>Bitte dieses Fenster schließen und Langtut erneut öffnen.</p>");
     const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
+    const clientSecret = store.getSetting<string>("google_drive.oauth_client_secret") ?? config.googleOAuthClientSecret;
     const form = new URLSearchParams({ code: request.query.code, client_id: clientId!, redirect_uri: pending.redirectUri, grant_type: "authorization_code", code_verifier: pending.verifier });
+    if (clientSecret) form.set("client_secret", clientSecret);
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form });
     const token = await tokenResponse.json() as { access_token?: string; error?: string; error_description?: string };
     store.deleteSetting("google_drive.oauth_pending");

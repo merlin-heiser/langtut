@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Curriculum, CurriculumModule, Job, LexiconLookupResult, LexiconSenseCandidate, SessionPlan } from "@langtut/contracts";
 import { API_BASE, api, post, uploadPackage } from "./api.js";
 import { nativeGoogleDrive } from "./native-google-drive.js";
+import { readGoogleOAuthClientFile } from "./google-oauth.js";
 
 type Status = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
 type Preview = { deck: { name: string; action: string }; models: Array<{ name: string; action: string; managed: boolean; fields: string[]; changes?: string[]; templates?: Record<string, unknown>; css?: string }> };
@@ -52,6 +53,7 @@ export function App() {
   const [importingPackage, setImportingPackage] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [googleClientId, setGoogleClientId] = useState("");
+  const [importingGoogleOAuth, setImportingGoogleOAuth] = useState(false);
 
   const reload = async () => {
     const [nextStatus, nextCosts, nextCurriculum, nextModuleProgress, latestPlacement, latestJob, nextSettings, nextPackages, nextActivities] = await Promise.all([
@@ -197,6 +199,18 @@ export function App() {
       window.location.assign(`${API_BASE}/sync/google/authorize`);
     } catch (error) { handleError(error); }
   }
+  async function importGoogleOAuth(file?: File) {
+    if (!file) return;
+    setImportingGoogleOAuth(true);
+    try {
+      const oauth = await readGoogleOAuthClientFile(file);
+      await post("/sync/google/client", oauth);
+      setGoogleClientId(oauth.clientId);
+      setSettings((current) => current ? { ...current, sync: { ...(current.sync ?? { connected: false, pendingEvents: 0 }), configured: true, googleOAuthClientId: oauth.clientId } } : current);
+      setNotice("Google-OAuth-Konfiguration importiert. Nur die Client-ID wurde übernommen.");
+    } catch (error) { handleError(error); }
+    finally { setImportingGoogleOAuth(false); }
+  }
 
   async function activatePackage(id: string) {
     try { await post(`/packages/${id}/activate`); setPlan(undefined); setSession(undefined); setTurns([]); setReport(undefined); setPlacement(undefined); await reload(); }
@@ -217,7 +231,7 @@ export function App() {
     </header>
 
     {notice && <aside className="notice">{notice}</aside>}
-    {screen === "settings" && !settings?.sync?.connected && <section className="settings-card"><div><small>GOOGLE OAUTH</small><h3>Google Drive verbinden</h3><p>In Google Cloud einen OAuth-Client vom Typ „Desktop-App“ anlegen und dessen Client-ID einfügen.</p></div><div className="settings-form"><label>OAuth Client-ID<input value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} placeholder={settings?.sync?.googleOAuthClientId ?? "…apps.googleusercontent.com"} autoComplete="off" /></label><button className="primary" onClick={() => void connectGoogle()}>Mit Google verbinden</button></div></section>}
+    {screen === "settings" && !settings?.sync?.connected && <section className="settings-card"><div><small>GOOGLE OAUTH</small><h3>Google Drive verbinden</h3><p>Eine Google-OAuth-JSON-Datei kann auf Windows und Android importiert werden. Langtut übernimmt daraus nur die Client-ID; das Client-Secret bleibt lokal.</p></div><div className="settings-form"><label>OAuth Client-ID<input value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} placeholder={settings?.sync?.googleOAuthClientId ?? "…apps.googleusercontent.com"} autoComplete="off" /></label><label>OAuth-JSON importieren<input type="file" accept="application/json,.json" disabled={importingGoogleOAuth} onChange={(event) => { void importGoogleOAuth(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><button className="primary" onClick={() => void connectGoogle()}>Mit Google verbinden</button></div></section>}
 
     {screen === "settings" && <section className="settings-page"><div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div><article className="settings-card"><div><small>GOOGLE DRIVE</small><h3>Lernstand synchronisieren</h3><p>{settings?.sync?.connected ? `Verbunden · ${settings.sync.pendingEvents} lokale Änderungen ausstehend${settings.sync.lastSyncAt ? ` · letzter Abgleich ${new Date(settings.sync.lastSyncAt).toLocaleString("de-DE")}` : ""}` : "Die Google-Anmeldung erfolgt über den Systembrowser. Drive speichert nur Langtut-Ereignisse im privaten App-Datenbereich."}</p>{settings?.sync?.error && <p className="runtime-warning">{settings.sync.error}</p>}</div><div className="settings-form"><button className="primary" disabled={!settings?.sync?.configured || syncing} onClick={() => void syncNow()}>{syncing ? "Gleicht ab …" : "Jetzt abgleichen"}</button>{!settings?.sync?.configured && <small>Google OAuth noch nicht verbunden.</small>}</div></article><article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article><article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert. Für eine getrennte Wahl pro Aufgabe können wir später ein feineres Profil ergänzen.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article>{settings?.localMt && <LocalMtSettingsCard value={settings.localMt} saving={savingLocalMt} installing={installingLocalMt} onChange={(localMt) => setSettings({ ...settings, localMt })} onSave={saveLocalMt} onInstall={installLocalMt} />}</section>}
 

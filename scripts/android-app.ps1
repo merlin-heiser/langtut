@@ -1,3 +1,4 @@
+param([switch]$StartApi)
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -49,8 +50,28 @@ $env:LANGTUT_ALLOW_HTTP_API = 'true'
 $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 
+function Test-LangtutApi {
+  try {
+    Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:3210/api/v1/status' -TimeoutSec 5 | Out-Null
+    return $true
+  } catch { return $false }
+}
+
 Push-Location $repoRoot
 try {
+  if ($StartApi -and -not (Test-LangtutApi)) {
+    Write-Host 'Lokale API nicht gefunden; starte apps/api im Hintergrund ...' -ForegroundColor DarkCyan
+    Start-Process -FilePath 'powershell.exe' -WorkingDirectory $repoRoot -WindowStyle Hidden -ArgumentList @(
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'npm.cmd --prefix apps/api run dev'
+    ) | Out-Null
+
+    $deadline = (Get-Date).AddSeconds(60)
+    while (-not (Test-LangtutApi) -and (Get-Date) -lt $deadline) {
+      Start-Sleep -Seconds 1
+    }
+    if (-not (Test-LangtutApi)) { throw 'Die automatisch gestartete API wurde innerhalb von 60 Sekunden nicht erreichbar.' }
+  }
+
   & adb -s $serial reverse tcp:3210 tcp:3210
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

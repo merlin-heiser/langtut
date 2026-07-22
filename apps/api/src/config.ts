@@ -16,6 +16,7 @@ export interface AppConfig {
   };
   modelTasksPath: string;
   googleOAuthClientId?: string;
+  googleOAuthClientSecret?: string;
 }
 
 export async function loadConfig(root = process.cwd()): Promise<AppConfig> {
@@ -38,5 +39,6 @@ export async function loadConfig(root = process.cwd()): Promise<AppConfig> {
     },
     modelTasksPath: path.resolve(root, raw.models),
     googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+    googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
   };
 }

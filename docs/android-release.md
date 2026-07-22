@@ -56,6 +56,14 @@ angeschlossenen Pixel 7 genügt:
 make androidapp
 ```
 
+`make androidapp` benötigt für Build und Installation keine laufende API. Die
+installierte Debug-App verwendet für ihre Lernfunktionen weiterhin die lokale API.
+Wenn diese ebenfalls automatisch gestartet werden soll, verwende:
+
+```powershell
+make androidapp-run
+```
+
 Bei mehreren ADB-Verbindungen zum selben oder zu mehreren Pixel-7-Geräten kann
 das Ziel mit `LANGTUT_ADB_SERIAL` eindeutig gewählt werden.
 
@@ -65,6 +73,15 @@ value from `adb devices -l` before running the script.
 The script configures `adb reverse tcp:3210 tcp:3210`, so `localhost` inside the phone
 is forwarded to the API running on the computer. HTTP is enabled only in the debug
 variant; regular Android builds continue to require HTTPS.
+
+## Google Drive OAuth import
+
+In Settings, choose the Google OAuth JSON file under **OAuth-JSON importieren** on
+Windows or Android. Langtut reads `installed.client_id` (or `web.client_id`) and, when
+present, stores the client secret only in the local API configuration for the desktop
+token exchange. It is never synced, logged, or bundled into the Android application.
+Android uses the native Google account picker/token flow and therefore does not require
+an Android OAuth client for this local debug path.
 
 ## Build a Play Store bundle
 
