@@ -4,10 +4,10 @@ import path from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import type { PlacementEvaluation, TutorReport, TutorTurn } from "@langtut/contracts";
+import type { LearnerProfile, PlacementEvaluation, SessionAnalysis, TutorReport, TutorTurn } from "@langtut/contracts";
 import {
   DEFAULT_PACKAGE_ID, LearningPackageRepository, applyProgress, createSessionPlan, deriveModuleStatus,
-  nextAvailableModule, recomputeLocks, renderPackagePrompt, type LearningActivity, type LoadedLearningPackage,
+  nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, type LearningActivity, type LoadedLearningPackage,
   type PlacementItemDefinition,
 } from "@langtut/domain";
 import { AnkiClient, type AnkiGateway } from "./anki.js";
@@ -16,6 +16,7 @@ import { ContentPipeline } from "./content-pipeline.js";
 import { Store } from "./database.js";
 import { newPlacement, recommendation, scoreAnswer } from "./placement.js";
 import { ModelRouter, modelChoices, type ModelGateway } from "./providers.js";
+import { aggregateErrorTags, buildLearnerContext, readRapport, transcriptFromEvents, writeRapportAtomic } from "./rapport.js";
 
 type PlacementState = ReturnType<typeof newPlacement> & { packageId: string; answers: Array<{ itemId: string; correct: boolean }>; recommendedModuleId?: string };
 type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
@@ -35,6 +36,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   const savedModelSelection = store.getSetting<{ openai: string; gemini: string }>("models.selection");
   if (savedModelSelection && models instanceof ModelRouter) models.setModelSelection(savedModelSelection);
   const anki = overrides.anki ?? new AnkiClient(config.anki.url, config.anki.deck, config.anki.key);
+  const dataRoot = path.dirname(config.dbPath);
 
   function active(): LoadedLearningPackage {
     const pkg = packages.require(activePackageId);
@@ -125,6 +127,18 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   });
 
   app.get("/api/v1/curriculum", async () => refreshCurriculum());
+  app.get("/api/v1/modules/progress", async () => {
+    const curriculum = await refreshCurriculum();
+    return {
+      modules: Object.fromEntries(curriculum.modules.map((module) => {
+        const evidence = store.getEvidence(activePackageId, module.id);
+        return [module.id, {
+          materialPrepared: preparationComplete(module, evidence),
+          attemptedMilestoneIds: evidence.attemptedMilestones,
+        }];
+      })),
+    };
+  });
   app.get("/api/v1/curriculum/next", async () => nextAvailableModule(await refreshCurriculum()));
   app.get("/api/v1/activities", async () => ({ packageId: activePackageId, activities: active().activities }));
   app.post("/api/v1/session-plans", async (_request, reply) => {
@@ -207,7 +221,14 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const module = (await refreshCurriculum()).modules.find(({ id }) => id === request.body?.moduleId);
     if (activity && module?.activityIds?.length && !module.activityIds.includes(activity.id)) return reply.code(400).send({ error: "activity_not_available_for_module" });
     const id = randomUUID(); store.createSession(activePackageId, id, request.body?.planId ?? null, request.body?.moduleId ?? null, activity?.id);
-    return reply.code(201).send({ ...store.getSession(id), activityId: activity?.id });
+    let initialTurns: ActivityTurn[] = [];
+    try { if (activity?.type === "roleplay") initialTurns = await executeOpeningTurns(id, activity, module); }
+    catch (error) {
+      store.completeSession(id, fallbackTutorReport(module?.focusTags ?? activity?.focusTags ?? [], {}));
+      request.log.warn({ err: error }, "Roleplay opening failed");
+      return reply.code(502).send({ error: "roleplay_opening_failed" });
+    }
+    return reply.code(201).send({ ...store.getSession(id), activityId: activity?.id, activity, initialTurns });
   });
   app.post<{ Params: { id: string }; Body: { message: string } }>("/api/v1/sessions/:id/activity-turns", async (request, reply) => {
     const session = store.getSession(request.params.id);
@@ -220,14 +241,37 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
     let turns: ActivityTurn[]; try { turns = await executeActivityTurn(request.params.id, request.body?.message ?? "", session.moduleId as string | undefined); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
-    return turns[0]?.turn ?? { message: "", correction: "", explanation: "", newExample: "" };
+    return turns[0]?.turn ?? { message: "", correction: "", explanation: "", newExample: "", errorTags: [] };
   });
   app.post<{ Params: { id: string } }>("/api/v1/sessions/:id/complete", async (request, reply) => {
     const session = store.getSession(request.params.id);
     if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
     const pkg = active(); const events = store.getSessionEvents(request.params.id);
-    const report = await models.structured<TutorReport>("session_report", `${renderPackagePrompt(pkg.prompts.session_report, pkg)} Erfinde keine Fehler. Erlaubte Tags: ${[...pkg.allowedTags].join(", ")}.\n${JSON.stringify(events)}`, "TutorReport");
-    store.completeSession(request.params.id, report); return report;
+    const start = events.find(({ eventType }) => eventType === "session_started")?.payload as { activityId?: string } | undefined;
+    const activity = pkg.activities.find(({ id }) => id === start?.activityId) ?? pkg.activities[0] ?? fallbackActivity();
+    const module = (await refreshCurriculum()).modules.find(({ id }) => id === session.moduleId);
+    const plan = session.planId ? store.getPlan(String(session.planId)) : null;
+    const transcript = transcriptFromEvents(events, activity);
+    const errorCounts = aggregateErrorTags(events);
+    const previousRapport = await readRapport(dataRoot, pkg.manifest.id);
+    const fallback = fallbackTutorReport(module?.focusTags ?? activity.focusTags ?? [], errorCounts);
+    try {
+      const prompt = `${renderPackagePrompt(pkg.prompts.session_report, pkg)}
+Aktualisiere das Lernrapport ausschließlich anhand belastbarer Beobachtungen. Keine Quellen, Daten, Sitzungsnummern oder Dialogzitate. Erhalte weiterhin relevante ältere Erkenntnisse, entferne überholte Annahmen und schreibe ein kompaktes vollständiges Markdown-Dokument mit den Abschnitten Interessen und Präferenzen, Stärken, Schwierigkeiten, Hilfreiche Unterstützung und Aktuelle Prioritäten.
+Erlaubte fachliche Tags: ${[...pkg.allowedTags].join(", ")}.
+Bisheriges Rapport:\n${previousRapport || "Noch kein Rapport."}
+Metadaten: ${JSON.stringify({ module: module?.title ?? null, activity: activity.title, sessionMode: plan?.mode ?? null, topics: module?.focusTags ?? activity.focusTags ?? [], functions: module?.functions ?? [], turns: events.filter(({ eventType }) => ["learner_turn", "activity_turn"].includes(eventType)).length, errorCounts })}
+Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
+      const analysis = await models.structured<SessionAnalysis>("session_report", prompt, "SessionAnalysis");
+      await writeRapportAtomic(dataRoot, pkg.manifest.id, analysis.rapportMarkdown);
+      store.setSetting(`rapport.profile.${pkg.manifest.id}`, analysis.profile);
+      store.completeSession(request.params.id, analysis.report);
+      return analysis.report;
+    } catch (error) {
+      store.completeSession(request.params.id, fallback);
+      request.log.warn({ err: error }, "Session completed without rapport update");
+      return fallback;
+    }
   });
 
   app.get("/health", async () => ({ ok: true }));
@@ -242,15 +286,37 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     for (const roleId of rolesAfterLearner(activity)) {
       const role = activity.roles.find(({ id }) => id === roleId)!;
       if (role.controller === "fixed") {
-        const turn = { message: role.message ?? "", correction: "", explanation: "", newExample: "" }; results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn }); continue;
+        const turn = { message: role.message ?? "", correction: "", explanation: "", newExample: "", errorTags: [] }; results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn }); continue;
       }
       if (role.controller !== "llm") continue;
       const roleTemplate = pkg.prompts[role.prompt ?? "tutor_conversation"] ?? pkg.prompts.tutor_conversation;
-      const prompt = `${renderPackagePrompt(roleTemplate, pkg)}\nRolle: ${role.label}. Aktivität: ${activity.title}.\nAktives Modul: ${module?.title ?? "freie Wiederholung"}. Funktionen: ${module?.functions.join(", ") ?? "keine"}. Lernziele: ${module?.grammarMilestones.map(({ description }) => description).join(" | ") ?? "keine"}.\nBisher: ${JSON.stringify(history)}\nLernereingabe: ${message}\nGib keine Markdown-Syntax aus. message enthält nur die Reaktion in ${pkg.manifest.targetLanguage.name}, explanation nur die Erklärung in ${pkg.manifest.sourceLanguage.name}.`;
+      const learnerContext = currentLearnerContext(pkg, module, activity);
+      const recentDialogue = transcriptFromEvents(history, activity).split("\n").slice(-8).join("\n");
+      const prompt = `${renderPackagePrompt(roleTemplate, pkg)}\nRolle: ${role.label}. Aktivität: ${activity.title}.\nAktives Modul: ${module?.title ?? "freie Wiederholung"}. Funktionen: ${module?.functions.join(", ") ?? "keine"}. Lernziele: ${module?.grammarMilestones.map(({ description }) => description).join(" | ") ?? "keine"}.\nRelevanter Lernenden-Kontext:\n${learnerContext}\nJüngster Dialog:\n${recentDialogue || "Noch kein Dialog."}\nLernereingabe: ${message}\nBleibe in der Rolle und erwähne das Lernprofil nicht. Gib keine Markdown-Syntax aus. message enthält nur die Reaktion in ${pkg.manifest.targetLanguage.name}, explanation nur die Erklärung in ${pkg.manifest.sourceLanguage.name}. errorTags enthält höchstens drei kurze fachliche Tags und bleibt leer, wenn keine Korrektur nötig ist.`;
       const turn = normalizeTutorTurn(await models.structured<TutorTurn>("tutor_conversation", prompt, "TutorTurn"), pkg.manifest.sourceLanguage.name);
       results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn });
     }
     return results;
+  }
+  async function executeOpeningTurns(sessionId: string, activity: LearningActivity, module?: Awaited<ReturnType<typeof refreshCurriculum>>["modules"][number]): Promise<ActivityTurn[]> {
+    const pkg = active(); const results: ActivityTurn[] = [];
+    for (const roleId of rolesBeforeLearner(activity)) {
+      const role = activity.roles.find(({ id }) => id === roleId)!;
+      if (role.controller === "fixed") {
+        const turn = { message: role.message ?? "", correction: "", explanation: "", newExample: "", errorTags: [] };
+        results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn }); continue;
+      }
+      if (role.controller !== "llm") continue;
+      const roleTemplate = pkg.prompts[role.prompt ?? "tutor_conversation"] ?? pkg.prompts.tutor_conversation;
+      const prompt = `${renderPackagePrompt(roleTemplate, pkg)}\nRolle: ${role.label}. Eröffne dieses Rollenspiel mit genau einem natürlichen, kurzen Gesprächszug auf ${pkg.manifest.targetLanguage.name}.\nSzenario: ${activity.scenarioTarget}\nAktives Modul: ${module?.title ?? "freie Wiederholung"}. Funktionen: ${module?.functions.join(", ") ?? "keine"}.\nRelevanter Lernenden-Kontext:\n${currentLearnerContext(pkg, module, activity)}\nErkläre noch nichts, erwähne das Lernprofil nicht und gib keine Markdown-Syntax aus. correction, explanation, newExample und errorTags bleiben leer.`;
+      const turn = normalizeTutorTurn(await models.structured<TutorTurn>("tutor_conversation", prompt, "TutorTurn"), pkg.manifest.sourceLanguage.name);
+      results.push({ roleId, roleLabel: role.label, turn }); store.appendSessionEvent(sessionId, "activity_turn", { roleId, turn });
+    }
+    return results;
+  }
+  function currentLearnerContext(pkg: LoadedLearningPackage, module: Awaited<ReturnType<typeof refreshCurriculum>>["modules"][number] | undefined, activity: LearningActivity): string {
+    const profile = store.getSetting<LearnerProfile>(`rapport.profile.${pkg.manifest.id}`);
+    return buildLearnerContext(profile, [activity.title, ...(activity.focusTags ?? []), module?.title ?? "", ...(module?.focusTags ?? []), ...(module?.functions ?? [])]);
   }
   async function applyPlacementStart(moduleId: string) {
     const curriculum = await refreshCurriculum(); const index = curriculum.modules.findIndex((module) => module.id === moduleId); if (index < 0) return;
@@ -260,6 +326,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
 }
 
 function fallbackActivity(): LearningActivity { return { id: "conversation", title: "Konversation", roles: [{ id: "learner", label: "Lernender", controller: "learner" }, { id: "tutor", label: "Tutor", controller: "llm", prompt: "tutor_conversation" }], turnOrder: ["learner", "tutor"], rounds: 8 }; }
+export function rolesBeforeLearner(activity: LearningActivity): string[] { const learnerIndex = activity.turnOrder.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); return learnerIndex < 0 ? [] : activity.turnOrder.slice(0, learnerIndex); }
 export function rolesAfterLearner(activity: LearningActivity): string[] { const learnerIndex = activity.turnOrder.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); const rotated = [...activity.turnOrder.slice(learnerIndex + 1), ...activity.turnOrder.slice(0, learnerIndex)]; const nextLearner = rotated.findIndex((id) => activity.roles.find((role) => role.id === id)?.controller === "learner"); return nextLearner < 0 ? rotated : rotated.slice(0, nextLearner); }
 function publicPlacement(placement: PlacementState) { return { id: placement.id, packageId: placement.packageId, status: placement.status, startedAt: placement.startedAt, itemsAnswered: placement.itemsAnswered, maxItems: placement.maxItems, recommendedModuleId: placement.recommendedModuleId, weakTags: placement.weakTags }; }
 function publicPlacementItem(item: PlacementItemDefinition) { return { id: item.id, level: item.level, prompt: item.prompt, kind: item.kind ?? "production", choices: item.choices }; }
@@ -270,6 +337,7 @@ export function normalizeTutorTurn(turn: TutorTurn, sourceLanguageName = "Deutsc
   let message = plain(turn.message); let explanation = plain(turn.explanation);
   const translated = message.match(new RegExp(`\\s*${escapeRegExp(sourceLanguageName)}:\\s*(.+)$`, "i"));
   if (translated?.index !== undefined) { message = message.slice(0, translated.index).trim(); explanation = [plain(translated[1]), explanation].filter(Boolean).join(" "); }
-  return { message, correction: plain(turn.correction), explanation, newExample: plain(turn.newExample) };
+  return { message, correction: plain(turn.correction), explanation, newExample: plain(turn.newExample), errorTags: [...new Set((turn.errorTags ?? []).map(plain).filter(Boolean))].slice(0, 3) };
 }
+function fallbackTutorReport(focusTags: string[], errorCounts: Record<string, number>): TutorReport { return { focusTags, observedErrors: Object.entries(errorCounts).map(([tag, count]) => `${tag} (${count})`), observedStrengths: [], suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: [] }; }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }

@@ -8,11 +8,13 @@ describe("tutor output normalization", () => {
       correction: "**Toto je správne.**",
       explanation: "Betonung auf der **ersten** Silbe.",
       newExample: "`Toto je príklad.`",
+      errorTags: [],
     })).toEqual({
       message: "Výborne! Toto je správne.",
       correction: "Toto je správne.",
       explanation: "Der Satz ist korrekt. Betonung auf der ersten Silbe.",
       newExample: "Toto je príklad.",
+      errorTags: [],
     });
   });
 });

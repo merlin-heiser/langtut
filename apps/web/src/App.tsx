@@ -5,21 +5,23 @@ import { api, post, uploadPackage } from "./api.js";
 type Status = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
 type Preview = { deck: { name: string; action: string }; models: Array<{ name: string; action: string; managed: boolean; fields: string[]; changes?: string[]; templates?: Record<string, unknown>; css?: string }> };
 type Placement = { id: string; status: string; itemsAnswered: number; maxItems: number; recommendedModuleId?: string; weakTags: string[]; nextItem?: { id: string; prompt: string; level: string; kind: string; choices?: string[] } };
-type TutorTurn = { message: string; correction: string; explanation: string; newExample: string };
-type TutorReport = { focusTags: string[]; observedErrors: string[]; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
-type TutorSession = { id: string; status: string; moduleId?: string };
+type TutorTurn = { message: string; correction: string; explanation: string; newExample: string; errorTags: string[] };
+type TutorReport = { focusTags: string[]; observedErrors: string[]; observedStrengths: string[]; suggestedReviewItems: string[]; nextSessionSuggestions: string[] };
 type ApiCostSummary = { currency: "USD"; weekCost: number; totalCost: number; weekInputTokens: number; weekOutputTokens: number; totalInputTokens: number; totalOutputTokens: number; weekStartedAt: string; trackedSince: string | null; pricingVersion: string };
 type Settings = { anki: { configured: boolean }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } } };
 type ModelSettingsResponse = Pick<Settings, "models">;
 type LearningPackage = { id: string; version: string; name: string; targetLanguage: { code: string; name: string }; sourceLanguage: { code: string; name: string }; active: boolean; modules: number; progress: { started: number; completed: number; total: number }; capabilities: { placement: boolean; nativeVocabulary: boolean; customPrompts: boolean; activities: boolean } };
 type PackageShelf = { activePackageId: string; packages: LearningPackage[] };
-type Activity = { id: string; title: string; description?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number };
+type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; attemptedMilestoneIds: string[] }> };
+type Activity = { id: string; title: string; description?: string; type?: "roleplay"; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number };
 type ActivityTurn = { roleId: string; roleLabel: string; turn: TutorTurn };
+type TutorSession = { id: string; status: string; moduleId?: string; activity?: Activity; initialTurns?: ActivityTurn[] };
 
 export function App() {
   const [status, setStatus] = useState<Status>();
   const [costs, setCosts] = useState<ApiCostSummary>();
   const [curriculum, setCurriculum] = useState<Curriculum>();
+  const [moduleProgress, setModuleProgress] = useState<ModuleProgress["modules"]>({});
   const [plan, setPlan] = useState<SessionPlan>();
   const [preview, setPreview] = useState<Preview>();
   const [placement, setPlacement] = useState<Placement>();
@@ -42,10 +44,11 @@ export function App() {
   const [importingPackage, setImportingPackage] = useState(false);
 
   const reload = async () => {
-    const [nextStatus, nextCosts, nextCurriculum, latestPlacement, latestJob, nextSettings, nextPackages, nextActivities] = await Promise.all([
-      api<Status>("/status"), api<ApiCostSummary>("/costs/summary"), api<Curriculum>("/curriculum"), api<Placement | null>("/placement-sessions/latest"), api<Job | null>("/jobs/latest"), api<Settings>("/settings"), api<PackageShelf>("/packages"), api<{ activities: Activity[] }>("/activities"),
+    const [nextStatus, nextCosts, nextCurriculum, nextModuleProgress, latestPlacement, latestJob, nextSettings, nextPackages, nextActivities] = await Promise.all([
+      api<Status>("/status"), api<ApiCostSummary>("/costs/summary"), api<Curriculum>("/curriculum"), api<ModuleProgress>("/modules/progress"), api<Placement | null>("/placement-sessions/latest"), api<Job | null>("/jobs/latest"), api<Settings>("/settings"), api<PackageShelf>("/packages"), api<{ activities: Activity[] }>("/activities"),
     ]);
     setStatus(nextStatus); setCosts(nextCosts); setCurriculum(nextCurriculum); setPlacement(latestPlacement ?? undefined);
+    setModuleProgress(nextModuleProgress.modules);
     setJob(latestJob && latestJob.status !== "completed" ? latestJob : undefined);
     setSettings(nextSettings);
     setPackageShelf(nextPackages); setActivities(nextActivities.activities); setActivityId((selected) => nextActivities.activities.some(({ id }) => id === selected) ? selected : nextActivities.activities[0]?.id);
@@ -186,17 +189,23 @@ export function App() {
 
     <section>
       <div className="section-title"><span>03</span><h2>Curriculum</h2></div>
-      <div className="roadmap">{curriculum?.modules.map((module, index) => <article className={`module ${module.status}`} key={module.id}>
-        <div className="module-index">{String(index + 1).padStart(2, "0")}</div><div><small>{module.displayLevel} · {module.status}</small><h3>{module.title}</h3><p>Ziel: {module.vocabTarget} Vokabeln · {module.grammarMilestones.length} Grammatikziele</p><div className="tags">{module.focusTags.map((tag) => <span key={tag}>{tag.replace(/^(topic_|func_|grammar_|case_|verb_|syntax_)/, "")}</span>)}</div>{module.status === "preparing" && <details className="milestones"><summary>Aktive Milestone-Aufgaben</summary>{module.grammarMilestones.map((milestone) => <button key={milestone.id} onClick={() => recordMilestone(module.id, milestone.id).catch(handleError)}>{milestone.description} · Versuch protokollieren</button>)}</details>}</div>
-        {["available", "preparing"].includes(module.status) && <button className="prepare" disabled={placement?.status !== "completed" || (job?.moduleId === module.id && ["queued", "running"].includes(job.status))} onClick={() => prepare(module)}>{module.status === "preparing" ? "Vorbereitung fortsetzen" : "Vorbereiten"}</button>}
-      </article>)}</div>
+      <div className="roadmap">{curriculum?.modules.map((module, index) => {
+        const progress = moduleProgress[module.id];
+        const milestoneWorkReady = module.status === "preparing" && progress?.materialPrepared;
+        const attempted = new Set(progress?.attemptedMilestoneIds ?? []);
+        const pendingMilestones = module.grammarMilestones.filter(({ id }) => !attempted.has(id));
+        return <article className={`module ${module.status}`} key={module.id}>
+          <div className="module-index">{String(index + 1).padStart(2, "0")}</div><div><small>{module.displayLevel} · {module.status}</small><h3>{module.title}</h3><p>Ziel: {module.vocabTarget} Vokabeln · {module.grammarMilestones.length} Grammatikziele</p><div className="tags">{module.focusTags.map((tag) => <span key={tag}>{tag.replace(/^(topic_|func_|grammar_|case_|verb_|syntax_)/, "")}</span>)}</div>{milestoneWorkReady && <details className="milestones" open><summary>Milestone-Aufgaben · {pendingMilestones.length} offen</summary>{pendingMilestones.map((milestone) => <button key={milestone.id} onClick={() => recordMilestone(module.id, milestone.id).catch(handleError)}>{milestone.description} · Versuch protokollieren</button>)}</details>}</div>
+          {(module.status === "available" || (module.status === "preparing" && !progress?.materialPrepared)) && <button className="prepare" disabled={placement?.status !== "completed" || (job?.moduleId === module.id && ["queued", "running"].includes(job.status))} onClick={() => prepare(module)}>{module.status === "preparing" ? "Vorbereitung fortsetzen" : "Vorbereiten"}</button>}
+        </article>;
+      })}</div>
       {job && <aside className={`job ${job.status}`}><b>{recoveredAnkiFailure ? "Früherer Versuch fehlgeschlagen. Anki ist jetzt verbunden – Vorbereitung fortsetzen." : job.message}</b><div><i style={{ width: `${job.progress * 100}%` }} /></div>{job.error && !recoveredAnkiFailure && <p>{job.error}</p>}</aside>}
     </section>
 
     <section>
       <div className="section-title"><span>04</span><h2>Tutor-Session</h2></div>
       {!session && <article className="wide-card"><div><small>GEFÜHRTE PRAXIS</small><h3>Aktiv anwenden, gezielt korrigieren.</h3><p>Das Lernpaket bestimmt Rollen und Ablauf; der Player führt die Methode sicher aus.</p>{availableActivities.length > 0 && <label className="activity-picker">Lernmethode<select value={availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id} onChange={(event) => setActivityId(event.target.value)}>{availableActivities.map((activity) => <option key={activity.id} value={activity.id}>{activity.title} · {activity.roles.length} Rollen</option>)}</select></label>}</div><button disabled={placement?.status !== "completed"} onClick={() => startTutor().catch(handleError)}>Session starten</button></article>}
-      {session && <article className="tutor"><div className="dialogue">{turns.length === 0 && <p className="empty">Schreibe deinen ersten Satz auf {activePackage?.targetLanguage.name ?? "der Zielsprache"}.</p>}{turns.map((turn, index) => <div className="exchange" key={index}><p className="learner">{turn.learner}</p><div>{turn.responses.map((response) => <div className="tutor-answer" key={response.roleId}><small>{response.roleLabel}</small><b>{response.turn.message}</b>{response.turn.correction && <p>Korrektur: {response.turn.correction}</p>}{response.turn.explanation && <p>{response.turn.explanation}</p>}</div>)}</div></div>)}</div>{session.status === "active" && <><div className="answer"><input value={sessionInput} onChange={(e) => setSessionInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendTurn()} placeholder={`Eingabe auf ${activePackage?.targetLanguage.name ?? "der Zielsprache"} …`} /><button onClick={() => sendTurn().catch(handleError)}>Senden</button></div><button className="finish" onClick={() => completeTutor().catch(handleError)}>Session abschließen</button></>}{report && <div className="report"><small>SESSIONBERICHT</small><h3>Beobachtete Lernsignale</h3><p>{report.observedErrors.join(" · ") || "Keine belastbaren Fehler beobachtet."}</p><div className="tags">{report.focusTags.map((tag) => <span key={tag}>{tag}</span>)}</div><p>Nächster Schritt: {report.nextSessionSuggestions.join(" · ")}</p></div>}</article>}
+      {session && <article className="tutor">{session.activity?.type === "roleplay" && <div className="scenario"><small>ROLLENSPIEL</small><h3>{session.activity.title}</h3><p lang={activePackage?.targetLanguage.code}>{session.activity.scenarioTarget}</p><details><summary>Deutsche Erklärung anzeigen</summary><p lang={activePackage?.sourceLanguage.code}>{session.activity.scenarioSource}</p></details></div>}<div className="dialogue">{session.initialTurns?.map((response) => <div className="opening" key={response.roleId}><div className="tutor-answer"><small>{response.roleLabel}</small><b>{response.turn.message}</b></div></div>)}{turns.length === 0 && !(session.initialTurns?.length) && <p className="empty">Schreibe deinen ersten Satz auf {activePackage?.targetLanguage.name ?? "der Zielsprache"}.</p>}{turns.map((turn, index) => <div className="exchange" key={index}><p className="learner">{turn.learner}</p><div>{turn.responses.map((response) => <div className="tutor-answer" key={response.roleId}><small>{response.roleLabel}</small><b>{response.turn.message}</b>{response.turn.correction && <p>Korrektur: {response.turn.correction}</p>}{response.turn.explanation && <p>{response.turn.explanation}</p>}</div>)}</div></div>)}</div>{session.status === "active" && <><div className="answer"><input value={sessionInput} onChange={(e) => setSessionInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendTurn()} placeholder={`Eingabe auf ${activePackage?.targetLanguage.name ?? "der Zielsprache"} …`} /><button onClick={() => sendTurn().catch(handleError)}>Senden</button></div><button className="finish" onClick={() => completeTutor().catch(handleError)}>Session abschließen</button></>}{report && <div className="report"><small>SESSIONBERICHT</small><h3>Beobachtete Lernsignale</h3><p>{report.observedErrors.join(" · ") || "Keine belastbaren Fehler beobachtet."}</p>{report.observedStrengths.length > 0 && <p>Stärken: {report.observedStrengths.join(" · ")}</p>}<div className="tags">{report.focusTags.map((tag) => <span key={tag}>{tag}</span>)}</div><p>Nächster Schritt: {report.nextSessionSuggestions.join(" · ")}</p></div>}</article>}
     </section>
 
     <section>

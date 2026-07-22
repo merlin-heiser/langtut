@@ -17,6 +17,8 @@ export interface GeneratedContracts {
   VerificationResult?: VerificationResult;
   TutorTurn?: TutorTurn;
   TutorReport?: TutorReport;
+  LearnerProfile?: LearnerProfile;
+  SessionAnalysis?: SessionAnalysis;
   Job?: Job;
   PlacementSession?: PlacementSession;
   PlacementItem?: PlacementItem;
@@ -126,13 +128,45 @@ export interface TutorTurn {
   correction: string;
   explanation: string;
   newExample: string;
+  /**
+   * @maxItems 3
+   */
+  errorTags: string[];
 }
 export interface TutorReport {
   focusTags: string[];
   observedErrors: string[];
+  observedStrengths: string[];
   suggestedReviewItems: string[];
   suggestedNewCards: CandidateItem[];
   nextSessionSuggestions: string[];
+}
+export interface LearnerProfile {
+  /**
+   * @maxItems 8
+   */
+  interests: string[];
+  /**
+   * @maxItems 8
+   */
+  strengths: string[];
+  /**
+   * @maxItems 8
+   */
+  difficulties: string[];
+  /**
+   * @maxItems 5
+   */
+  helpfulSupports: string[];
+  /**
+   * @maxItems 5
+   */
+  priorities: string[];
+}
+export interface SessionAnalysis {
+  report: TutorReport;
+  profile: LearnerProfile;
+  rapportMarkdown: string;
 }
 export interface Job {
   id: string;

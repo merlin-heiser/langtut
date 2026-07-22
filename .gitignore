@@ -5,6 +5,7 @@ data/*.db
 data/*.db-*
 data/exports/
 data/diagnostics/
+data/rapports/
 .env
 *.log
 .vite/

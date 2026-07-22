@@ -39,6 +39,8 @@ npm run package:validate -- examples/english-norwegian
 
 Mitgelieferte Vokabeln werden zuerst importiert; das LLM ergänzt nur bis zum Ziel des Moduls. Prompts überschreiben einzelne bekannte Aufgaben, alle übrigen kommen aus der Standardbibliothek.
 
+Abgeschlossene Konversationssessions aktualisieren pro Lernpaket ein lokales Lernrapport unter `data/rapports/<paket-id>/rapport.md`. Es enthält eine knappe, quellenfreie Zusammenfassung beobachteter Interessen, Stärken, Schwierigkeiten und hilfreicher Unterstützung und wird für kommende Tutorzüge relevanzgefiltert verwendet.
+
 ## Verbindliche Quellen
 
 - Produktregeln: `specs/product.md`

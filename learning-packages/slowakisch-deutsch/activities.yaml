@@ -1,15 +1,201 @@
 activities:
-  - id: guided-conversation
-    title: Geführte Konversation
-    description: Lernender und Tutor führen ein zielgebundenes Gespräch.
-    roles:
-      - id: learner
-        label: Lernender
-        controller: learner
-      - id: tutor
-        label: Tutor
-        controller: llm
-        prompt: tutor_conversation
-    turnOrder: [learner, tutor]
+  - id: rp-spelling-desk
+    title: Pri informačnom pulte
+    type: roleplay
+    scenarioTarget: Pracovník informačného pultu sa opýta na vaše meno. Predstavte sa a vyhláskujte ho.
+    scenarioSource: Ein Mitarbeiter am Informationsschalter fragt nach Ihrem Namen. Stellen Sie sich vor und buchstabieren Sie ihn.
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [topic_alphabet, func_spell]
+    roles: [{ id: clerk, label: Pracovník, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [clerk, learner]
+    rounds: 6
+  - id: rp-first-class
+    title: Prvý deň v kurze
+    type: roleplay
+    scenarioTarget: Ste prvýkrát na kurze slovenčiny. Lektor vás pozdraví a pomôže vám zorientovať sa.
+    scenarioSource: Sie sind zum ersten Mal in einem Slowakischkurs. Der Kursleiter begrüßt Sie und hilft Ihnen bei der Orientierung.
+    moduleIds: [a0_survival_phrases]
+    focusTags: [topic_classroom, func_greet]
+    roles: [{ id: teacher, label: Lektor, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [teacher, learner]
+    rounds: 7
+  - id: rp-meet-neighbor
+    title: Nový sused
+    type: roleplay
+    scenarioTarget: Na chodbe stretnete nového suseda. Zoznámte sa a opýtajte sa na základné osobné informácie.
+    scenarioSource: Im Hausflur treffen Sie einen neuen Nachbarn. Lernen Sie sich kennen und fragen Sie nach grundlegenden persönlichen Informationen.
+    moduleIds: [a1_introductions_identity]
+    focusTags: [topic_identity, func_introduce]
+    roles: [{ id: neighbor, label: Sused, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [neighbor, learner]
     rounds: 8
-
+  - id: rp-family-photo
+    title: Rodinná fotografia
+    type: roleplay
+    scenarioTarget: Kamarát vám ukáže rodinnú fotografiu. Pýtajte sa na ľudí a porozprávajte aj o svojej rodine.
+    scenarioSource: Ein Freund zeigt Ihnen ein Familienfoto. Fragen Sie nach den Personen und erzählen Sie auch von Ihrer Familie.
+    moduleIds: [a1_family_people]
+    focusTags: [topic_family, grammar_gender]
+    roles: [{ id: friend, label: Kamarát, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [friend, learner]
+    rounds: 8
+  - id: rp-plan-a-day
+    title: Spoločný deň
+    type: roleplay
+    scenarioTarget: Kamarát chce s vami naplánovať spoločný deň. Porovnajte svoj denný režim a dohodnite si čas.
+    scenarioSource: Ein Freund möchte einen gemeinsamen Tag planen. Vergleichen Sie Ihre Tagesabläufe und vereinbaren Sie eine Zeit.
+    moduleIds: [a1_daily_routine_time]
+    focusTags: [topic_daily_routine, func_tell_time]
+    roles: [{ id: friend, label: Kamarát, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [friend, learner]
+    rounds: 8
+  - id: rp-city-directions
+    title: Cesta v meste
+    type: roleplay
+    scenarioTarget: Turista hľadá miesto v meste. Vysvetlite mu, kde sa nachádza a ako sa tam dostane.
+    scenarioSource: Ein Tourist sucht einen Ort in der Stadt. Erklären Sie, wo er liegt und wie man dorthin kommt.
+    moduleIds: [a1_home_city_basic_location]
+    focusTags: [topic_city, func_describe_location]
+    roles: [{ id: tourist, label: Turista, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [tourist, learner]
+    rounds: 8
+  - id: rp-restaurant
+    title: Objednávka v reštaurácii
+    type: roleplay
+    scenarioTarget: Sedíte v reštaurácii. Objednajte si jedlo a nápoj a reagujte na otázky čašníka.
+    scenarioSource: Sie sitzen in einem Restaurant. Bestellen Sie Essen und ein Getränk und reagieren Sie auf die Fragen des Kellners.
+    moduleIds: [a1_food_restaurant]
+    focusTags: [topic_food, func_order]
+    roles: [{ id: waiter, label: Čašník, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [waiter, learner]
+    rounds: 8
+  - id: rp-shop
+    title: Nákup oblečenia
+    type: roleplay
+    scenarioTarget: V obchode hľadáte vhodné oblečenie. Pýtajte sa na cenu, veľkosť a možnosti.
+    scenarioSource: In einem Geschäft suchen Sie passende Kleidung. Fragen Sie nach Preis, Größe und Möglichkeiten.
+    moduleIds: [a1_shopping_prices]
+    focusTags: [topic_shopping, func_request]
+    roles: [{ id: seller, label: Predavač, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [seller, learner]
+    rounds: 8
+  - id: rp-station
+    title: Na stanici
+    type: roleplay
+    scenarioTarget: Na stanici si chcete kúpiť lístok a overiť spojenie. Pracovník prepážky začne rozhovor.
+    scenarioSource: Am Bahnhof möchten Sie eine Fahrkarte kaufen und die Verbindung prüfen. Der Schaltermitarbeiter beginnt das Gespräch.
+    moduleIds: [a2_travel_transport]
+    focusTags: [topic_travel, func_ask_info]
+    roles: [{ id: clerk, label: Pracovník, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [clerk, learner]
+    rounds: 9
+  - id: rp-origin-route
+    title: Odkiaľ a kam
+    type: roleplay
+    scenarioTarget: Spolucestujúci sa s vami rozpráva o tom, odkiaľ prichádzate, kam idete a bez čoho necestujete.
+    scenarioSource: Ein Mitreisender spricht mit Ihnen darüber, woher Sie kommen, wohin Sie fahren und ohne was Sie nicht reisen.
+    moduleIds: [a2_genitive_prepositions]
+    focusTags: [grammar_genitive, func_describe]
+    roles: [{ id: traveler, label: Spolucestujúci, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [traveler, learner]
+    rounds: 8
+  - id: rp-doctor
+    title: U lekára
+    type: roleplay
+    scenarioTarget: Ste u lekára. Opíšte svoje ťažkosti, odpovedzte na otázky a požiadajte o radu.
+    scenarioSource: Sie sind beim Arzt. Beschreiben Sie Ihre Beschwerden, beantworten Sie Fragen und bitten Sie um Rat.
+    moduleIds: [a2_health_services]
+    focusTags: [topic_health, func_describe_symptoms]
+    roles: [{ id: doctor, label: Lekár, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [doctor, learner]
+    rounds: 9
+  - id: rp-weekend-plans
+    title: Plány na víkend
+    type: roleplay
+    scenarioTarget: Kamarát navrhuje spoločný víkend. Dohodnite sa, čo budete robiť a kedy.
+    scenarioSource: Ein Freund schlägt ein gemeinsames Wochenende vor. Vereinbaren Sie, was Sie wann unternehmen werden.
+    moduleIds: [a2_future_plans]
+    focusTags: [topic_plans, grammar_future]
+    roles: [{ id: friend, label: Kamarát, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [friend, learner]
+    rounds: 9
+  - id: rp-route-change
+    title: Zmena trasy
+    type: roleplay
+    scenarioTarget: Cestou sa zmení plán. Dohodnite s partnerom, kam pôjdete, čím a ktorým smerom.
+    scenarioSource: Unterwegs ändert sich der Plan. Klären Sie mit Ihrem Partner, wohin, womit und in welche Richtung Sie fahren oder gehen.
+    moduleIds: [a2_motion_verbs_system]
+    focusTags: [grammar_motion_verbs, func_give_directions]
+    roles: [{ id: partner, label: Partner, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [partner, learner]
+    rounds: 9
+  - id: rp-study-interview
+    title: Rozhovor o štúdiu a práci
+    type: roleplay
+    scenarioTarget: Nový kolega sa zaujíma o vaše štúdium, prácu a skúsenosti. Veďte prirodzený rozhovor.
+    scenarioSource: Ein neuer Kollege interessiert sich für Ihr Studium, Ihre Arbeit und Erfahrungen. Führen Sie ein natürliches Gespräch.
+    moduleIds: [a2_work_study]
+    focusTags: [topic_work, topic_study]
+    roles: [{ id: colleague, label: Kolega, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [colleague, learner]
+    rounds: 9
+  - id: rp-lost-property
+    title: Stratená vec
+    type: roleplay
+    scenarioTarget: Na recepcii opisujete stratenú vec a okolnosti. Pracovník potrebuje presné informácie.
+    scenarioSource: An einer Rezeption beschreiben Sie einen verlorenen Gegenstand und die Umstände. Der Mitarbeiter benötigt genaue Angaben.
+    moduleIds: [b1_case_mastery_round1]
+    focusTags: [grammar_cases, func_describe]
+    roles: [{ id: receptionist, label: Recepčný, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [receptionist, learner]
+    rounds: 9
+  - id: rp-hypothetical-problem
+    title: Čo by ste urobili?
+    type: roleplay
+    scenarioTarget: Kamarát opisuje nepríjemnú situáciu. Diskutujte, čo by ste urobili a čo by sa stalo za iných podmienok.
+    scenarioSource: Ein Freund beschreibt eine unangenehme Situation. Besprechen Sie, was Sie tun würden und was unter anderen Bedingungen geschähe.
+    moduleIds: [b1_conditional_mood]
+    focusTags: [grammar_conditional, func_advise]
+    roles: [{ id: friend, label: Kamarát, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [friend, learner]
+    rounds: 10
+  - id: rp-reunion-story
+    title: Stretnutie po rokoch
+    type: roleplay
+    scenarioTarget: Stretnete známeho po dlhom čase. Porozprávajte, čo sa stalo a čo plánujete ďalej.
+    scenarioSource: Sie treffen nach langer Zeit einen Bekannten. Erzählen Sie, was geschehen ist und was Sie als Nächstes planen.
+    moduleIds: [b1_narration_past_future]
+    focusTags: [grammar_narration, func_narrate]
+    roles: [{ id: acquaintance, label: Známy, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [acquaintance, learner]
+    rounds: 10
+  - id: rp-community-debate
+    title: Diskusia o susedstve
+    type: roleplay
+    scenarioTarget: Na komunitnom stretnutí sa diskutuje o zmene vo vašom okolí. Vyjadrite názor, argumentujte a reagujte na námietky.
+    scenarioSource: Bei einem Nachbarschaftstreffen wird über eine Veränderung diskutiert. Äußern und begründen Sie Ihre Meinung und reagieren Sie auf Einwände.
+    moduleIds: [b1_opinions_discussion]
+    focusTags: [func_express_opinion, func_argue]
+    roles: [{ id: moderator, label: Moderátor, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [moderator, learner]
+    rounds: 10
+  - id: rp-complaint
+    title: Reklamácia služby
+    type: roleplay
+    scenarioTarget: Telefonujete zákazníckej podpore kvôli nefungujúcej službe. Vysvetlite problém a dohodnite riešenie.
+    scenarioSource: Sie rufen wegen einer nicht funktionierenden Dienstleistung beim Kundendienst an. Erklären Sie das Problem und vereinbaren Sie eine Lösung.
+    moduleIds: [b1_service_scenarios]
+    focusTags: [topic_services, func_complain]
+    roles: [{ id: agent, label: Pracovník podpory, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [agent, learner]
+    rounds: 10
+  - id: rp-final-visit
+    title: Návšteva na Slovensku
+    type: roleplay
+    scenarioTarget: Počas návštevy Slovenska riešite plán dňa, dopravu, jedlo aj nečakaný problém. Partner bude situáciu postupne rozvíjať.
+    scenarioSource: Während eines Slowakei-Besuchs klären Sie Tagesplan, Verkehr, Essen und ein unerwartetes Problem. Ihr Gesprächspartner entwickelt die Situation schrittweise weiter.
+    moduleIds: [b1_final_integration]
+    focusTags: [func_integrate, topic_everyday]
+    roles: [{ id: host, label: Hostiteľ, controller: llm, prompt: tutor_conversation }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [host, learner]
+    rounds: 12

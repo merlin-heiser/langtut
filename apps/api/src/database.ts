@@ -82,6 +82,11 @@ export class Store {
     this.db.prepare("INSERT INTO session_plans(id,payload_json,created_at,package_id) VALUES (?,?,?,?)").run(plan.id, JSON.stringify(plan), plan.createdAt, plan.packageId);
   }
 
+  getPlan(id: string): SessionPlan | null {
+    const row = this.db.prepare("SELECT payload_json FROM session_plans WHERE id=?").get(id) as { payload_json: string } | undefined;
+    return row ? JSON.parse(row.payload_json) as SessionPlan : null;
+  }
+
   savePlacement(placement: { id: string; packageId: string; status: string; startedAt: string }): void {
     const now = new Date().toISOString();
     this.db.prepare(`INSERT INTO placement_sessions(id,status,payload_json,created_at,updated_at,package_id) VALUES (?,?,?,?,?,?)

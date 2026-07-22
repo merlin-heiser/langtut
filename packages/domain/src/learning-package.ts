@@ -30,6 +30,7 @@ export interface LearningActivity {
   turnOrder: string[];
   rounds: number;
   focusTags?: string[];
+  moduleIds?: string[];
 }
 export interface PlacementItemDefinition {
   id: string; level: string; prompt: string; expected: string[]; tag: string;
@@ -173,6 +174,11 @@ export async function loadLearningPackage(packageRoot: string, _projectRoot = pr
   const activities = activityDoc.activities ?? [];
   validateActivities(activities, prompts);
   const activityIds = new Set(activities.map(({ id }) => id));
+  for (const activity of activities) for (const moduleId of activity.moduleIds ?? []) {
+    const module = modules.find(({ id }) => id === moduleId);
+    if (!module) throw new Error(`${activity.id}: unknown module ${moduleId}`);
+    module.activityIds = [...new Set([...(module.activityIds ?? []), activity.id])];
+  }
   for (const module of modules) for (const activityId of module.activityIds ?? []) if (!activityIds.has(activityId)) throw new Error(`${module.id}: unknown activity ${activityId}`);
   const placementDoc = await readOptionalYaml<{ items?: PlacementItemDefinition[] } | PlacementItemDefinition[]>(packageRoot, "placement.yaml", []);
   const placement = Array.isArray(placementDoc) ? placementDoc : placementDoc.items ?? [];

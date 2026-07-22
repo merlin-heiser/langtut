@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AnkiMetrics, CandidateItem, CurriculumModule, GeneratedItems, VerificationResult } from "@langtut/contracts";
+import type { AnkiMetrics, CandidateItem, CurriculumModule, SessionAnalysis, TutorTurn, VerificationResult } from "@langtut/contracts";
 import { buildApp } from "../apps/api/src/app.js";
 import type { AnkiGateway, SetupPreview } from "../apps/api/src/anki.js";
 import type { ModelGateway } from "../apps/api/src/providers.js";
@@ -26,7 +26,8 @@ class FakeAnkiGateway implements AnkiGateway {
 class FakeModels implements ModelGateway {
   private vocab = 0;
   readonly vocabularyPrompts: string[] = [];
-  constructor(private readonly module: CurriculumModule) {}
+  reportPrompt = "";
+  constructor(private readonly module: CurriculumModule, private readonly failAnalysis = false) {}
   status() { return { fake: { configured: true } }; }
   async structured<T>(taskId: string, prompt: string, definitionName: string): Promise<T> {
     if (definitionName === "GeneratedItems") {
@@ -49,6 +50,19 @@ class FakeModels implements ModelGateway {
     if (definitionName === "VerificationResult") {
       const items = JSON.parse(prompt.slice(prompt.lastIndexOf("\n") + 1)) as CandidateItem[];
       return { results: items.map(({ itemId }) => ({ itemId, approved: true, issues: [] })) } as VerificationResult as T;
+    }
+    if (definitionName === "TutorTurn") return {
+      message: prompt.includes("Eröffne dieses Rollenspiel") ? "Dobrý deň, ako sa voláte?" : "Teší ma. Odkiaľ ste?",
+      correction: prompt.includes("Lernereingabe") ? "Volám sa Anna." : "", explanation: "", newExample: "", errorTags: prompt.includes("Lernereingabe") ? ["grammar_reflexive"] : [],
+    } as TutorTurn as T;
+    if (definitionName === "SessionAnalysis") {
+      if (this.failAnalysis) throw new Error("analysis unavailable");
+      this.reportPrompt = prompt;
+      return {
+        report: { focusTags: this.module.focusTags, observedErrors: ["Reflexives Verb"], observedStrengths: ["Antwortet verständlich"], suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: ["Vorstellung wiederholen"] },
+        profile: { interests: ["Reisen"], strengths: ["Verständliche Antworten"], difficulties: ["Reflexive Verben"], helpfulSupports: ["Kurze Modelle"], priorities: ["Vorstellung"] },
+        rapportMarkdown: "# Lernrapport\n\n## Interessen und Präferenzen\n- Reisen\n\n## Stärken\n- Verständliche Antworten\n\n## Schwierigkeiten\n- Reflexive Verben\n\n## Hilfreiche Unterstützung\n- Kurze Modelle\n\n## Aktuelle Prioritäten\n- Vorstellung\n",
+      } as SessionAnalysis as T;
     }
     throw new Error(`Unexpected fake schema ${definitionName}`);
   }
@@ -80,6 +94,8 @@ describe("vertical release path with fake integrations", () => {
     expect(models.vocabularyPrompts[0]).not.toContain(module.title);
     expect(models.vocabularyPrompts[0]).not.toContain(module.grammarMilestones[0].description);
     expect(models.vocabularyPrompts[0]).toContain("keine einzelnen Buchstaben oder Zeichen");
+    const preparedProgress = (await app.inject({ method: "GET", url: "/api/v1/modules/progress" })).json();
+    expect(preparedProgress.modules[module.id]).toEqual({ materialPrepared: true, attemptedMilestoneIds: [] });
     const diagnostics = (await readFile(path.join(temporary, "diagnostics/slowakisch-deutsch.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(diagnostics.filter(({ event }) => event === "batch_finished")).toHaveLength(Math.ceil(module.vocabTarget / 40));
@@ -88,6 +104,8 @@ describe("vertical release path with fake integrations", () => {
       const response = await app.inject({ method: "POST", url: `/api/v1/modules/${module.id}/milestones/${milestone.id}/attempt` });
       expect(response.statusCode).toBe(200);
     }
+    const completedProgress = (await app.inject({ method: "GET", url: "/api/v1/modules/progress" })).json();
+    expect(completedProgress.modules[module.id].attemptedMilestoneIds).toEqual(module.grammarMilestones.map(({ id }) => id));
     const curriculum = (await app.inject({ method: "GET", url: "/api/v1/curriculum" })).json();
     expect(curriculum.modules[0].status).toBe("learning");
     expect(curriculum.modules[1].status).toBe("available");
@@ -143,5 +161,42 @@ describe("vertical release path with fake integrations", () => {
     expect(restored).toMatchObject({ id: started.id, status: "completed", itemsAnswered: 6, recommendedModuleId: module.id });
     expect(restored.nextItem).toBeUndefined();
     await second.close();
+  });
+
+  it("opens a roleplay before the learner and updates the package rapport on completion", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-roleplay-"));
+    process.env.LANGTUT_DB_PATH = path.join(temporary, "roleplay.db");
+    const module = (await loadCurriculum(process.cwd())).modules[2];
+    const models = new FakeModels(module);
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models });
+    const started = await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: "rp-meet-neighbor" } });
+    expect(started.statusCode).toBe(201);
+    expect(started.json()).toMatchObject({ activity: { type: "roleplay" }, initialTurns: [{ roleId: "neighbor", turn: { message: "Dobrý deň, ako sa voláte?" } }] });
+    const sessionId = started.json().id as string;
+    await app.inject({ method: "POST", url: `/api/v1/sessions/${sessionId}/activity-turns`, payload: { message: "Ja volám Anna." } });
+    const completed = await app.inject({ method: "POST", url: `/api/v1/sessions/${sessionId}/complete` });
+    expect(completed.json()).toMatchObject({ observedStrengths: ["Antwortet verständlich"] });
+    expect(models.reportPrompt).toContain("Sused: Dobrý deň, ako sa voláte?\nLernender: Ja volám Anna.");
+    expect(models.reportPrompt).toContain('"grammar_reflexive":1');
+    expect(await readFile(path.join(temporary, "rapports", "slowakisch-deutsch", "rapport.md"), "utf8")).toContain("Reflexive Verben");
+    await app.close();
+  });
+
+  it("completes the session while preserving the old rapport when analysis fails", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-rapport-failure-"));
+    const dbPath = path.join(temporary, "failure.db");
+    process.env.LANGTUT_DB_PATH = dbPath;
+    const module = (await loadCurriculum(process.cwd())).modules[2];
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models: new FakeModels(module, true) });
+    const started = (await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: "rp-meet-neighbor" } })).json();
+    await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/activity-turns`, payload: { message: "Ja volám Anna." } });
+    const completed = await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/complete` });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json().observedErrors).toEqual(["grammar_reflexive (1)"]);
+    await app.close();
+    const store = await Store.open(dbPath, process.cwd());
+    expect(store.getSession(started.id)?.status).toBe("completed");
+    store.close();
+    await expect(readFile(path.join(temporary, "rapports", "slowakisch-deutsch", "rapport.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

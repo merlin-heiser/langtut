@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LearningPackageRepository, loadLearningPackage } from "@langtut/domain";
-import { rolesAfterLearner } from "../apps/api/src/app.js";
+import { rolesAfterLearner, rolesBeforeLearner } from "../apps/api/src/app.js";
 import { Store } from "../apps/api/src/database.js";
 import { ContentPipeline } from "../apps/api/src/content-pipeline.js";
 import type { AnkiMetrics, CandidateItem, GeneratedItems, VerificationResult } from "@langtut/contracts";
@@ -21,7 +21,12 @@ describe("learning packages", () => {
     expect(pkg.vocabulary[0]).toMatchObject({ target: "hello", source: "hei" });
     expect(pkg.activities[0].roles).toHaveLength(3);
     expect(rolesAfterLearner(pkg.activities[0])).toEqual(["host", "guest"]);
+    expect(rolesBeforeLearner(pkg.activities[0])).toEqual([]);
     expect(pkg.prompts.tutor_conversation).toContain("assigned conversation role");
+    const slovak = await loadLearningPackage(path.join(process.cwd(), "learning-packages", "slowakisch-deutsch"));
+    expect(slovak.activities.every(({ type, scenarioTarget, scenarioSource }) => type === "roleplay" && scenarioTarget && scenarioSource)).toBe(true);
+    expect(rolesBeforeLearner(slovak.activities[0])).toEqual(["clerk"]);
+    expect(slovak.curriculum.modules.find(({ id }) => id === "a1_food_restaurant")?.activityIds).toContain("rp-restaurant");
   });
 
   it("installs a zip and updates the same package id", async () => {
@@ -51,7 +56,7 @@ describe("learning packages", () => {
     const pkg = await loadLearningPackage(path.join(process.cwd(), "examples", "english-norwegian"));
     const anki = new SeedAnki(); const models = new SeedModels(); const job = new ContentPipeline(store, anki, models, pkg).start(pkg.curriculum.modules[0]);
     for (let attempt = 0; attempt < 100 && !["completed", "failed"].includes(store.getJob(job.id)?.status ?? ""); attempt++) await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(store.getJob(job.id)?.status).toBe("completed"); expect(models.requestedVocab).toEqual([2]);
+    expect(store.getJob(job.id)?.status).toBe("completed"); expect(models.requestedVocab).toEqual([10]);
     expect(anki.items.filter(({ kind }) => kind === "vocab")).toHaveLength(3);
     store.close();
   });
