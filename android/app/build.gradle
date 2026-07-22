@@ -10,6 +10,11 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "de.langtut.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    sourceSets {
+        main {
+            assets.srcDirs = [file(project.findProperty('langtutAssetsDir') ?: 'src/main/assets')]
+        }
+    }
     defaultConfig {
         applicationId "de.langtut.app"
         minSdkVersion rootProject.ext.minSdkVersion
