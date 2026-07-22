@@ -57,7 +57,10 @@ Abgeschlossene Konversationssessions aktualisieren pro Lernpaket ein lokales Ler
 
 ## Verbindliche Quellen
 
+- Entwicklungsregeln: `AGENTS.md`
 - Produktregeln: `specs/product.md`
+- Architektur: `specs/architecture/system.md`
+- Entscheidungen: `specs/decisions/`
 - HTTP-Vertrag: `specs/api/openapi.yaml`
 - Datenverträge: `specs/schemas/contracts.schema.json`
 - Standardpaket-Metadaten: `learning-packages/slowakisch-deutsch/package.yaml`

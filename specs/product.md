@@ -25,9 +25,10 @@ führen zu Recovery, niemals zu einer Rückstufung.
 
 ## Plattform
 
-Phase 1 ist eine lokale Desktop-Web-App. Anki und Provider werden ausschließlich vom
-Fastify-Backend angesprochen. Die React-Oberfläche enthält keine Lernlogik und bleibt
-für eine spätere Capacitor-Verpackung geeignet.
+Windows ist die vollständige lokale Referenzlaufzeit. Ein Android-Capacitor-Artefakt
+existiert für Geräte-Deployment. Bis die lokale Android-Lernruntime fertig ist, nutzt
+die bestehende Android-Oberfläche weiterhin eine explizit konfigurierte API; sie darf
+nicht als autonomer Offline-Client beschrieben werden.
 
 Abgeschlossene oder aktive Placements werden nach einem Neuladen aus SQLite
 wiederhergestellt. „Modul vorbereiten“ autorisiert zugleich die sichere Einrichtung
@@ -38,4 +39,4 @@ fehlender app-eigener Anki-Modelle. Fremde gleichnamige Modelle bleiben geschüt
 - kein automatischer Modulstatus durch ein LLM
 - kein stiller Provider-Fallback
 - keine Änderung fremder Anki-Modelle
-- kein Android-Artefakt im ersten Release
+- kein als autonom deklarierter Android-Client vor lokaler Android-Lernruntime

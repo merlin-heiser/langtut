@@ -5,6 +5,10 @@ hosted HTTPS service: it owns SQLite/data, provider keys, and any Anki Desktop l
 Never put provider or Anki keys into `VITE_*` variables; those values are compiled into
 the Android application.
 
+This is the current delivery state, not the target architecture. The target and the
+shared-first platform boundary are defined in `specs/architecture/system.md`; Android
+must not be described as autonomous until its local runtime is delivered.
+
 For a hosted API, set `LANGTUT_CORS_ORIGINS=https://localhost` (and any web origin you
 intentionally support). `https://localhost` is the Capacitor Android WebView origin.
 The current API is a single-user local backend and has no end-user authentication; add

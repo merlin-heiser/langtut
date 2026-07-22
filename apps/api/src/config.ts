@@ -15,6 +15,7 @@ export interface AppConfig {
     expansionRatio: number;
   };
   modelTasksPath: string;
+  googleOAuthClientId?: string;
 }
 
 export async function loadConfig(root = process.cwd()): Promise<AppConfig> {
@@ -36,5 +37,6 @@ export async function loadConfig(root = process.cwd()): Promise<AppConfig> {
       expansionRatio: raw.session.expansion_ratio,
     },
     modelTasksPath: path.resolve(root, raw.models),
+    googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
   };
 }

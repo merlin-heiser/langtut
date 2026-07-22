@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { Job, ModuleStatus, SessionPlan } from "@langtut/contracts";
-import type { ModuleEvidence, ProgressByModule } from "@langtut/domain";
+import { reduceSyncEvents, type ModuleEvidence, type ProgressByModule, type SyncEventKind, type SyncEventV1 } from "@langtut/domain";
+
+// Credentials and runtime-only integration details intentionally never leave this device.
+function isLocalOnlySetting(key: string): boolean {
+  return key === "anki.connect_api_key" || key.startsWith("google_drive.") || key.startsWith("provider.") || key.startsWith("local_mt.");
+}
 
 export class Store {
   readonly db: Database.Database;
@@ -30,10 +35,63 @@ export class Store {
         })();
       }
     }
+    store.ensureSyncIdentity();
+    store.bootstrapSyncLog();
     return store;
   }
 
   close(): void { this.db.close(); }
+
+  private syncState<T>(key: string): T | undefined {
+    const row = this.db.prepare("SELECT value_json FROM sync_state WHERE key=?").get(key) as { value_json: string } | undefined;
+    return row ? JSON.parse(row.value_json) as T : undefined;
+  }
+  private setSyncState(key: string, value: unknown): void {
+    this.db.prepare("INSERT INTO sync_state(key,value_json,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at")
+      .run(key, JSON.stringify(value), new Date().toISOString());
+  }
+  private ensureSyncIdentity(): void { if (!this.syncState<string>("device_id")) this.setSyncState("device_id", randomUUID()); }
+  /** Converts an existing SQLite snapshot once, so enabling Drive on an established install does not lose history. */
+  private bootstrapSyncLog(): void {
+    const count = this.db.prepare("SELECT count(*) AS count FROM sync_events").get() as { count: number };
+    if (count.count) return;
+    const progress = this.db.prepare("SELECT package_id,module_id,status,attempted_milestones_json,updated_at FROM module_progress").all() as Array<{ package_id: string; module_id: string; status: string; attempted_milestones_json: string; updated_at: string }>;
+    const settings = this.db.prepare("SELECT key,value_json,updated_at FROM settings").all() as Array<{ key: string; value_json: string; updated_at: string }>;
+    const sessions = this.db.prepare("SELECT session_id,event_type,payload_json,created_at FROM session_events").all() as Array<{ session_id: string; event_type: string; payload_json: string; created_at: string }>;
+    for (const row of progress) this.appendSyncEvent("progress", { packageId: row.package_id, moduleId: row.module_id, status: row.status, attemptedMilestones: JSON.parse(row.attempted_milestones_json) }, row.updated_at);
+    for (const row of settings) if (!isLocalOnlySetting(row.key)) this.appendSyncEvent("setting", { key: row.key, value: JSON.parse(row.value_json) }, row.updated_at);
+    for (const row of sessions) this.appendSyncEvent("session_event", { sessionId: row.session_id, eventType: row.event_type, payload: transcriptPayload(row.session_id, row.event_type, JSON.parse(row.payload_json)) }, row.created_at);
+  }
+  syncDeviceId(): string { return this.syncState<string>("device_id")!; }
+  appendSyncEvent(kind: SyncEventKind, payload: Record<string, unknown>, occurredAt = new Date().toISOString()): SyncEventV1 {
+    const deviceId = this.syncDeviceId(); const sequence = (this.syncState<number>("next_sequence") ?? 0) + 1;
+    const event: SyncEventV1 = { schema: 1, id: randomUUID(), deviceId, sequence, occurredAt, kind, payload };
+    this.db.prepare("INSERT INTO sync_events(id,device_id,sequence,occurred_at,kind,payload_json) VALUES (?,?,?,?,?,?)")
+      .run(event.id, event.deviceId, event.sequence, event.occurredAt, event.kind, JSON.stringify(event.payload));
+    this.setSyncState("next_sequence", sequence); return event;
+  }
+  pendingSyncEvents(limit = 200): SyncEventV1[] {
+    const rows = this.db.prepare("SELECT * FROM sync_events WHERE uploaded_at IS NULL ORDER BY device_id,sequence LIMIT ?").all(limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({ schema: 1, id: String(row.id), deviceId: String(row.device_id), sequence: Number(row.sequence), occurredAt: String(row.occurred_at), kind: String(row.kind) as SyncEventKind, payload: JSON.parse(String(row.payload_json)) }));
+  }
+  markSyncEventsUploaded(ids: string[]): void {
+    if (!ids.length) return; const marks = ids.map(() => "?").join(","); this.db.prepare(`UPDATE sync_events SET uploaded_at=? WHERE id IN (${marks})`).run(new Date().toISOString(), ...ids);
+  }
+  ingestSyncEvents(events: SyncEventV1[]): { accepted: number } {
+    let accepted = 0; const insert = this.db.prepare("INSERT OR IGNORE INTO sync_events(id,device_id,sequence,occurred_at,kind,payload_json,uploaded_at) VALUES (?,?,?,?,?,?,?)");
+    this.db.transaction(() => { for (const event of events) { const result = insert.run(event.id, event.deviceId, event.sequence, event.occurredAt, event.kind, JSON.stringify(event.payload), new Date().toISOString()); accepted += result.changes; } })();
+    if (accepted) this.applySyncProjection(); return { accepted };
+  }
+  private applySyncProjection(): void {
+    const events = this.db.prepare("SELECT id,device_id,sequence,occurred_at,kind,payload_json FROM sync_events ORDER BY occurred_at,device_id,sequence").all() as Array<Record<string, unknown>>;
+    const projection = reduceSyncEvents(events.map((row) => ({ schema: 1, id: String(row.id), deviceId: String(row.device_id), sequence: Number(row.sequence), occurredAt: String(row.occurred_at), kind: String(row.kind) as SyncEventKind, payload: JSON.parse(String(row.payload_json)) })));
+    const saveProgress = this.db.prepare("INSERT INTO module_progress(package_id,module_id,status,attempted_milestones_json,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(package_id,module_id) DO UPDATE SET status=excluded.status,attempted_milestones_json=excluded.attempted_milestones_json,updated_at=excluded.updated_at");
+    const saveSetting = this.db.prepare("INSERT INTO settings(key,value_json,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at");
+    this.db.transaction(() => {
+      for (const [key, value] of Object.entries(projection.progress)) { const [packageId, moduleId] = key.split(":"); saveProgress.run(packageId, moduleId, value.status, JSON.stringify(value.milestones), new Date().toISOString()); }
+      for (const [key, value] of Object.entries(projection.settings)) if (!isLocalOnlySetting(key)) saveSetting.run(key, JSON.stringify(value), new Date().toISOString());
+    })();
+  }
 
   getSetting<T>(key: string): T | undefined {
     const row = this.db.prepare("SELECT value_json FROM settings WHERE key = ?").get(key) as { value_json: string } | undefined;
@@ -44,6 +102,7 @@ export class Store {
     this.db.prepare(`INSERT INTO settings(key,value_json,updated_at) VALUES (?,?,?)
       ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at`)
       .run(key, JSON.stringify(value), new Date().toISOString());
+    if (!isLocalOnlySetting(key)) this.appendSyncEvent("setting", { key, value });
   }
 
   deleteSetting(key: string): void {
@@ -59,6 +118,7 @@ export class Store {
     this.db.prepare(`INSERT INTO module_progress(package_id,module_id,status,updated_at) VALUES (?,?,?,?)
       ON CONFLICT(package_id,module_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at`)
       .run(packageId, moduleId, status, new Date().toISOString());
+    this.appendSyncEvent("progress", { packageId, moduleId, status });
   }
 
   getEvidence(packageId: string, moduleId: string): ModuleEvidence {
@@ -77,10 +137,12 @@ export class Store {
       imported_functions_json=excluded.imported_functions_json, imported_milestones_json=excluded.imported_milestones_json,
       attempted_milestones_json=excluded.attempted_milestones_json, updated_at=excluded.updated_at`)
       .run(packageId, moduleId, status, evidence.importedVocab, JSON.stringify(evidence.importedFunctions), JSON.stringify(evidence.importedMilestones), JSON.stringify(evidence.attemptedMilestones), new Date().toISOString());
+    this.appendSyncEvent("progress", { packageId, moduleId, status, attemptedMilestones: evidence.attemptedMilestones });
   }
 
   savePlan(plan: SessionPlan): void {
     this.db.prepare("INSERT INTO session_plans(id,payload_json,created_at,package_id) VALUES (?,?,?,?)").run(plan.id, JSON.stringify(plan), plan.createdAt, plan.packageId);
+    this.appendSyncEvent("session_plan", { id: plan.id, plan });
   }
 
   getPlan(id: string): SessionPlan | null {
@@ -93,6 +155,7 @@ export class Store {
     this.db.prepare(`INSERT INTO placement_sessions(id,status,payload_json,created_at,updated_at,package_id) VALUES (?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload_json=excluded.payload_json,updated_at=excluded.updated_at`)
       .run(placement.id, placement.status, JSON.stringify(placement), placement.startedAt, now, placement.packageId);
+    this.appendSyncEvent("placement", { id: placement.id, placement });
   }
 
   getPlacement<T>(packageId: string, id: string): T | null {
@@ -117,14 +180,16 @@ export class Store {
   }
 
   appendSessionEvent(sessionId: string, eventType: string, payload: unknown): void {
-    this.db.prepare("INSERT INTO session_events(session_id,event_type,payload_json,created_at) VALUES (?,?,?,?)")
-      .run(sessionId, eventType, JSON.stringify(payload), new Date().toISOString());
+    const createdAt = new Date().toISOString(); this.db.prepare("INSERT INTO session_events(session_id,event_type,payload_json,created_at) VALUES (?,?,?,?)")
+      .run(sessionId, eventType, JSON.stringify(payload), createdAt);
+    this.appendSyncEvent("session_event", { sessionId, eventType, payload: transcriptPayload(sessionId, eventType, payload) }, createdAt);
   }
 
   getSessionEvents(sessionId: string): Array<{ eventType: string; payload: unknown; createdAt: string }> {
     const rows = this.db.prepare("SELECT event_type,payload_json,created_at FROM session_events WHERE session_id=? ORDER BY id").all(sessionId) as Array<{ event_type: string; payload_json: string; created_at: string }>;
     return rows.map((row) => ({ eventType: row.event_type, payload: JSON.parse(row.payload_json), createdAt: row.created_at }));
   }
+  markTranscriptDeleted(sessionId: string): void { this.appendSyncEvent("transcript_deleted", { sessionId }); }
 
   completeSession(id: string, report: unknown): void {
     this.db.transaction(() => {
@@ -255,6 +320,7 @@ export class Store {
       this.db.prepare("INSERT INTO import_events(item_id,action,payload_json,created_at,package_id) VALUES (?,?,?,?,?)")
         .run(item.itemId, status, JSON.stringify({ packageId, moduleId: item.moduleId, kind: item.kind, ankiNoteId: ankiNoteId ?? null }), now, packageId);
     })();
+    this.appendSyncEvent("generated_item", { itemId: item.itemId, item: { packageId, ...item, status, ankiNoteId } });
   }
 
   quarantine(packageId: string, item: { itemId: string; moduleId: string }, payload: unknown, issues: string[]): void {
@@ -378,6 +444,10 @@ export class Store {
     }
     return `${lines.join("\n")}${lines.length ? "\n" : ""}`;
   }
+}
+
+function transcriptPayload(sessionId: string, eventType: string, payload: unknown): unknown {
+  return eventType === "learner_turn" || eventType === "activity_turn" ? { transcriptRef: sessionId } : payload;
 }
 
 export interface LexiconLookupRow {

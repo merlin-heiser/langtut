@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import Fastify from "fastify";
@@ -14,6 +14,7 @@ import { AnkiClient, type AnkiGateway } from "./anki.js";
 import { loadConfig } from "./config.js";
 import { ContentPipeline } from "./content-pipeline.js";
 import { Store } from "./database.js";
+import { GoogleDriveSync } from "./drive-sync.js";
 import { LexiconService } from "./lexicon.js";
 import { LocalMtClient, type LocalMtGateway } from "./local-mt.js";
 import { newPlacement, recommendation, scoreAnswer } from "./placement.js";
@@ -27,6 +28,7 @@ type ActivityOutcome = { turns: ActivityTurn[]; shouldComplete: boolean };
 export async function buildApp(root = process.cwd(), overrides: { models?: ModelGateway; anki?: AnkiGateway; localMt?: LocalMtGateway } = {}) {
   const config = await loadConfig(root);
   const store = await Store.open(config.dbPath, root);
+  const driveSync = new GoogleDriveSync(store);
   // Jobs run in-process. After a restart there is no worker that can resume them,
   // so leaving them running would permanently block a new preparation.
   store.failInterruptedJobs();
@@ -115,7 +117,49 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     anki: { configured: Boolean(store.getSetting("anki.connect_api_key") || config.anki.key) },
     models: { selection: models instanceof ModelRouter ? models.modelSelection() : undefined, choices: modelChoices },
     localMt: { ...(localMt.settings?.() ?? localMtSettings), status: await localMt.status?.() },
+    sync: { ...driveSync.status(), googleOAuthClientId: store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId },
   }));
+  app.get("/api/v1/sync/status", async () => driveSync.status());
+  app.post<{ Body: { clientId?: string } }>("/api/v1/sync/google/client", async (request, reply) => {
+    const clientId = request.body?.clientId?.trim();
+    if (!clientId?.endsWith(".apps.googleusercontent.com")) return reply.code(400).send({ error: "google_oauth_client_id_required" });
+    store.setSetting("google_drive.oauth_client_id", clientId); return { googleOAuthClientId: clientId };
+  });
+  app.get("/api/v1/sync/google/authorize", async (_request, reply) => {
+    const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
+    if (!clientId) return reply.code(409).send({ error: "google_oauth_client_id_required" });
+    const state = randomUUID(); const verifier = randomBytes(48).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const redirectUri = `http://127.0.0.1:${config.port}/api/v1/sync/google/callback`;
+    store.setSetting("google_drive.oauth_pending", { state, verifier, redirectUri, createdAt: new Date().toISOString() });
+    const query = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: "code", scope: "https://www.googleapis.com/auth/drive.appdata", code_challenge: challenge, code_challenge_method: "S256", state, access_type: "offline", prompt: "consent" });
+    return reply.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${query}`);
+  });
+  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/api/v1/sync/google/callback", async (request, reply) => {
+    const pending = store.getSetting<{ state: string; verifier: string; redirectUri: string }>("google_drive.oauth_pending");
+    if (request.query.error || !request.query.code || !pending || request.query.state !== pending.state) return reply.code(400).type("text/html").send("<h1>Google-Anmeldung fehlgeschlagen</h1><p>Bitte dieses Fenster schließen und Langtut erneut öffnen.</p>");
+    const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
+    const form = new URLSearchParams({ code: request.query.code, client_id: clientId!, redirect_uri: pending.redirectUri, grant_type: "authorization_code", code_verifier: pending.verifier });
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form });
+    const token = await tokenResponse.json() as { access_token?: string; error?: string; error_description?: string };
+    store.deleteSetting("google_drive.oauth_pending");
+    if (!tokenResponse.ok || !token.access_token) return reply.code(400).type("text/html").send(`<h1>Google-Anmeldung fehlgeschlagen</h1><p>${escapeHtml(token.error_description ?? token.error ?? "Unbekannter Fehler")}</p>`);
+    driveSync.configureAccessToken(token.access_token); const result = await driveSync.sync();
+    return reply.type("text/html").send(result.error ? `<h1>Google verbunden, Sync fehlgeschlagen</h1><p>${escapeHtml(result.error)}</p>` : "<h1>Google Drive verbunden</h1><p>Du kannst dieses Fenster schließen und zu Langtut zurückkehren.</p>");
+  });
+  // Native clients can also obtain OAuth tokens through their own system-browser flow.
+  app.post<{ Body: { accessToken?: string } }>("/api/v1/sync/google/token", async (request, reply) => {
+    const token = request.body?.accessToken?.trim(); if (!token) return reply.code(400).send({ error: "google_access_token_required" });
+    driveSync.configureAccessToken(token); const result = await driveSync.sync();
+    return result.connected ? result : reply.code(400).send(result);
+  });
+  app.post("/api/v1/sync/google/disconnect", async () => { driveSync.disconnect(); return driveSync.status(); });
+  app.post("/api/v1/sync/now", async () => driveSync.sync());
+  app.delete<{ Params: { id: string } }>("/api/v1/sessions/:id/transcript", async (request, reply) => {
+    if (!store.getSession(request.params.id)) return reply.code(404).send({ error: "session_not_found" });
+    const result = await driveSync.deleteTranscript(request.params.id);
+    return result.error ? reply.code(503).send(result) : result;
+  });
   app.post<{ Body: { openai?: string; gemini?: string } }>("/api/v1/settings/models", async (request, reply) => {
     if (!(models instanceof ModelRouter)) return reply.code(409).send({ error: "runtime_model_configuration_unavailable" });
     const current = models.modelSelection();
@@ -403,3 +447,4 @@ export function normalizeTutorTurn(turn: TutorTurn, sourceLanguageName = "Deutsc
 function emptyTutorTurn(): TutorTurn { return { message: "", correction: "", explanation: "", newExample: "", errorTags: [], targetLanguageUse: "target", goalProgress: "partial", conversationState: "continue" }; }
 function fallbackTutorReport(focusTags: string[], errorCounts: Record<string, number>, signals: { languageSwitches: number; goalCompletionPercent: number }): TutorReport { return { focusTags, observedErrors: Object.entries(errorCounts).map(([tag, count]) => `${tag} (${count})`), observedStrengths: [], languageSwitches: signals.languageSwitches, goalCompletionPercent: signals.goalCompletionPercent, suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: [] }; }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }

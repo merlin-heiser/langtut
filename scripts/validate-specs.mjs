@@ -11,9 +11,17 @@ const contracts = JSON.parse(await readFile(path.join(root, "specs/schemas/contr
 const modelTasks = YAML.parse(await readFile(path.join(root, "config/model_tasks.yaml"), "utf8"));
 const modelPricing = YAML.parse(await readFile(path.join(root, "config/model_pricing.yaml"), "utf8"));
 const localMt = YAML.parse(await readFile(path.join(root, "config/local_mt.yaml"), "utf8"));
+const product = await readFile(path.join(root, "specs/product.md"), "utf8");
+const architecture = await readFile(path.join(root, "specs/architecture/system.md"), "utf8");
+const adr = await readFile(path.join(root, "specs/decisions/0001-shared-drive-sync.md"), "utf8");
+const agentRules = await readFile(path.join(root, "AGENTS.md"), "utf8");
 const ids = new Set(road.modules.map((module) => module.id));
 const allowedTags = new Set(Object.values(tags.categories).flat());
 const failures = [];
+if (/kein Android-Artefakt/i.test(product)) failures.push("product spec still contradicts the shipped Android artifact");
+if (!architecture.includes("Google Drive `appDataFolder`") || !architecture.includes("Anki / AnkiWeb")) failures.push("system architecture must define Drive and Anki ownership");
+if (!adr.includes("Status:** accepted") || !adr.includes("Google Drive")) failures.push("ADR 0001 is incomplete");
+if (!agentRules.includes("packages/domain") || !agentRules.includes("Android runtime has local")) failures.push("AGENTS.md lacks shared-first and Android-runtime guardrails");
 const localMtKeys = new Set();
 for (const model of localMt.models ?? []) {
   if (localMtKeys.has(model.key)) failures.push(`local MT model key duplicated: ${model.key}`); else localMtKeys.add(model.key);
