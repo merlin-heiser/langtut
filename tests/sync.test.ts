@@ -25,4 +25,9 @@ describe("Drive sync event reducer", () => {
     expect(parseEventSegment(serializeEventSegment(original))).toEqual(original);
     expect(reduceSyncEvents(original).deletedTranscripts.s).toBe(true);
   });
+  it("projects a completed placement from another device", () => {
+    const placement = { id: "placement-1", packageId: "slowakisch-deutsch", status: "completed", startedAt: "2026-01-02T00:00:00.000Z", itemsAnswered: 8, maxItems: 20, score: 6, weakTags: ["func_greet"], answers: [], recommendedModuleId: "a1-introductions" };
+    const result = reduceSyncEvents([event("placement-event", "placement", { id: placement.id, placement })]);
+    expect(result.placements[placement.id]).toEqual(placement);
+  });
 });

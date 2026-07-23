@@ -62,6 +62,7 @@ try {
   New-Item -ItemType Directory -Path $localAssets | Out-Null
   Copy-Item -Path (Join-Path $repoRoot 'android/app/src/main/assets/*') -Destination $localAssets -Recurse -Force
 
+  $buildStartedAt = Get-Date
   Push-Location (Join-Path $repoRoot 'android')
   try {
     $gradleAssets = $localAssets.Replace('\', '/')
@@ -74,9 +75,9 @@ try {
   $apkCandidates = @(
     (Join-Path $repoRoot 'android/app/build/outputs/apk/debug/app-debug.apk'),
     'C:\tmp\android-studio-builds\android\app\outputs\apk\debug\app-debug.apk'
-  ) | Where-Object { Test-Path -LiteralPath $_ }
-  $apk = $apkCandidates | Select-Object -First 1
-  if (-not $apk) { throw 'Debug-APK wurde nach dem erfolgreichen Gradle-Build nicht gefunden.' }
+  ) | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ } | Where-Object { $_.LastWriteTime -ge $buildStartedAt.AddSeconds(-2) } | Sort-Object LastWriteTime -Descending
+  $apk = $apkCandidates | Select-Object -First 1 -ExpandProperty FullName
+  if (-not $apk) { throw 'Kein Debug-APK aus dem gerade abgeschlossenen Gradle-Build gefunden.' }
 
   & adb -s $serial install -r $apk
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
