@@ -32,6 +32,10 @@ aktiviert. Die Auswahl der fälligen Karte, die Bewertung und die Evidenzprojekt
 liegen im gemeinsamen Runtime; Windows- und Android-Anki-Bridges implementieren nur
 die dafür benötigten Anki-Operationen.
 
+Für das Vokabelziel erstellt der Player aus einer vorbereiteten Vokabel eine
+deterministische Übersetzungslektion. Auch dieses Ziel wird erst nach einer korrekten
+Antwort aktiviert; das Starten der Lektion allein verändert keinen Fortschritt.
+
 ## Szenario: Freischaltung ohne Mastery
 
 Wenn alle Notes importiert und jedes Vokabel-, Funktions- und Grammatikziel durch

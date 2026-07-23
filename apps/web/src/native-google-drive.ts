@@ -1,4 +1,4 @@
-type GoogleDrivePlugin = { signIn(): Promise<{ accessToken: string; email?: string }>; disconnect(): Promise<void> };
+type GoogleDrivePlugin = { signIn(): Promise<{ accessToken: string; email?: string }>; restore(): Promise<{ accessToken?: string; email?: string }>; disconnect(): Promise<void> };
 type CapacitorWindow = Window & { Capacitor?: { isNativePlatform?: () => boolean; Plugins?: { GoogleDriveBridge?: GoogleDrivePlugin } } };
 function plugin(): GoogleDrivePlugin {
   const result = (window as CapacitorWindow).Capacitor?.Plugins?.GoogleDriveBridge;
@@ -8,5 +8,6 @@ function plugin(): GoogleDrivePlugin {
 export const nativeGoogleDrive = {
   available: () => Boolean((window as CapacitorWindow).Capacitor?.isNativePlatform?.() && (window as CapacitorWindow).Capacitor?.Plugins?.GoogleDriveBridge),
   signIn: () => plugin().signIn(),
+  restore: () => plugin().restore(),
   disconnect: () => plugin().disconnect(),
 };

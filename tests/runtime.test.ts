@@ -75,6 +75,11 @@ describe("shared local runtime", () => {
     expect(anki.grades).toEqual([{ cardId: 42, outcome: "good" }]);
   });
 
+  it("rejects manual function and grammar activation", async () => {
+    const { client } = await fixture();
+    await expect(client.activateTarget("a0_alphabet_pronunciation", "target:function:func_greet")).rejects.toThrow("target_activation_requires_session_evidence");
+  });
+
   it("keeps the direct and HTTP bindings conformant for the learning entry flow", async () => {
     const direct = (await fixture()).client;
     const temporary = await mkdtemp(path.join(tmpdir(), "langtut-client-contract-"));

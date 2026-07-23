@@ -33,6 +33,12 @@ public class GoogleDriveBridgePlugin extends Plugin {
       null, null, new String[] { "com.google" }, null, null, null, null);
     startActivityForResult(call, intent, "receiveGoogleAccount");
   }
+  /** Restores only an account explicitly chosen earlier; it never opens the account picker. */
+  @PluginMethod public void restore(PluginCall call) {
+    String savedAccount = preferences().getString("account_name", null);
+    if (savedAccount == null || savedAccount.isBlank()) { call.resolve(new JSObject()); return; }
+    fetchDriveToken(call, new Account(savedAccount, "com.google"));
+  }
   @ActivityCallback private void receiveGoogleAccount(PluginCall call, ActivityResult result) {
     if (call == null) return;
     String accountName = result.getData() == null ? null : result.getData().getStringExtra(AccountManager.KEY_ACCOUNT_NAME);

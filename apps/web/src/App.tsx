@@ -64,6 +64,14 @@ export function App() {
   };
   useEffect(() => { reload().catch(handleError); }, []);
   useEffect(() => {
+    if (!nativeGoogleDrive.available()) return;
+    void nativeGoogleDrive.restore().then(async ({ accessToken }) => {
+      if (!accessToken) return;
+      await client.acceptGoogleToken(accessToken);
+      await reload();
+    }).catch(handleError);
+  }, []);
+  useEffect(() => {
     if (!job || ["completed", "failed"].includes(job.status)) return;
     const timer = window.setInterval(async () => {
       const next = await client.job(job.id);
@@ -105,6 +113,7 @@ export function App() {
     setSession(await client.startSession({ planId: activePlan.id, moduleId: activePlan.primaryModuleId ?? undefined, activityId: selectedActivityId }));
     setTurns([]); setReport(undefined); setExerciseResult(undefined); setSending(false); setSessionInput("");
   }
+  async function startVocabularyLesson(moduleId: string) { setSession(await client.startSession({ moduleId, activityId: "vocab-lesson" })); setSessionInput(""); }
   async function sendTurn() {
     const learner = sessionInput.trim();
     if (!session || !learner || sending || session.status !== "active") return;
@@ -187,7 +196,7 @@ export function App() {
     } catch (error) { handleError(error); } finally { setInstallingLocalMt(undefined); }
   }
   async function syncNow() {
-    setSyncing(true); try { const sync = await client.syncNow(); if (settings) setSettings({ ...settings, sync }); setNotice(sync.error ?? "Google Drive abgeglichen."); }
+    setSyncing(true); try { const sync = await client.syncNow(); if (settings) setSettings({ ...settings, sync }); setNotice(sync.error ?? "Google Drive abgeglichen."); await reload(); }
     catch (error) { handleError(error); } finally { setSyncing(false); }
   }
   async function connectGoogle() {
@@ -196,7 +205,7 @@ export function App() {
         const { accessToken } = await nativeGoogleDrive.signIn();
         const sync = await client.acceptGoogleToken(accessToken);
         if (settings) setSettings({ ...settings, sync });
-        setNotice("Google Drive verbunden."); return;
+        setNotice("Google Drive verbunden."); await reload(); return;
       }
       const clientId = googleClientId.trim() || settings?.sync?.googleOAuthClientId;
       if (!clientId) { setNotice("Bitte zuerst die OAuth-Client-ID aus der Google Cloud Console eintragen."); return; }
@@ -278,7 +287,7 @@ export function App() {
         const progress = moduleProgress[module.id];
         const milestoneWorkReady = module.status === "preparing" && progress?.materialPrepared;
         return <article className={`module ${module.status}`} key={module.id}>
-          <div className="module-index">{String(index + 1).padStart(2, "0")}</div><div><small>{module.displayLevel} · {module.status}</small><h3>{module.title}</h3><p>Ziel: {module.vocabTarget} Vokabeln · {module.grammarMilestones.length} Grammatikziele</p><ProgressBar progress={progress?.cards} /><div className="tags">{module.focusTags.map((tag) => <span key={tag}>{tag.replace(/^(topic_|func_|grammar_|case_|verb_|syntax_)/, "")}</span>)}</div>{milestoneWorkReady && <details className="milestones" open><summary>Lernziele</summary>{progress?.targets.map((target) => <div className="target" key={target.id}><span>{target.label}</span><ProgressBar progress={target.cards} />{target.activated ? <small>eingesetzt</small> : <button onClick={() => activateTarget(module.id, target.id).catch(handleError)}>Lernlektion abschließen</button>}</div>)}</details>}</div>
+          <div className="module-index">{String(index + 1).padStart(2, "0")}</div><div><small>{module.displayLevel} · {module.status}</small><h3>{module.title}</h3><p>Ziel: {module.vocabTarget} Vokabeln · {module.grammarMilestones.length} Grammatikziele</p><ProgressBar progress={progress?.cards} /><div className="tags">{module.focusTags.map((tag) => <span key={tag}>{tag.replace(/^(topic_|func_|grammar_|case_|verb_|syntax_)/, "")}</span>)}</div>{milestoneWorkReady && <details className="milestones" open><summary>Lernziele</summary>{progress?.targets.map((target) => <div className="target" key={target.id}><span>{target.label}</span><ProgressBar progress={target.cards} />{target.activated ? <small>eingesetzt</small> : target.kind === "vocab" ? <button onClick={() => startVocabularyLesson(module.id).catch(handleError)}>Vokabel-Lektion starten</button> : <small>In zielgebundener Übung nachweisen</small>}</div>)}</details>}</div>
           {(module.status === "available" || (module.status === "preparing" && !progress?.materialPrepared)) && <button className="prepare" disabled={placement?.status !== "completed" || (job?.moduleId === module.id && ["queued", "running"].includes(job.status))} onClick={() => prepare(module)}>{module.status === "preparing" ? "Vorbereitung fortsetzen" : "Vorbereiten"}</button>}
         </article>;
       })}</div>
