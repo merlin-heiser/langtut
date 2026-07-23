@@ -20,11 +20,12 @@ async function waitForApi() {
 
 try {
   await waitForApi();
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const web = spawn(npm, ["run", "dev"], {
+  const npmCommand = process.platform === "win32"
+    ? { command: process.execPath, args: [path.resolve(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js")] }
+    : { command: "npm", args: [] };
+  const web = spawn(npmCommand.command, [...npmCommand.args, "run", "dev"], {
     cwd: path.resolve(import.meta.dirname, "../apps/web"),
     stdio: "inherit",
-    shell: process.platform === "win32",
   });
   web.on("spawn", () => console.log("Webapp-Server wird auf Port 5174 gestartet."));
   web.on("error", (error) => {
@@ -35,6 +36,12 @@ try {
     if (code !== 0 || signal) console.error(`Webapp beendet (Code ${code ?? "-"}, Signal ${signal ?? "-"}).`);
     process.exitCode = code ?? (signal ? 1 : 0);
   });
+
+  const stopWeb = () => {
+    if (!web.killed) web.kill();
+  };
+  process.once("SIGINT", stopWeb);
+  process.once("SIGTERM", stopWeb);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

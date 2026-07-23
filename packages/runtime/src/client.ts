@@ -1,4 +1,5 @@
 import type { Curriculum, Job, LexiconLookupRequest, LexiconLookupResult, LexiconStagingRequest, SessionPlan } from "@langtut/contracts";
+import type { DailyPlan, DailyTaskResult } from "@langtut/domain";
 
 export type RuntimeStatus = { database: { reachable: boolean }; providers: Record<string, { configured?: boolean }>; anki: { reachable: boolean; dueReviews: number; error?: string } };
 export type SetupPreview = { deck: { name: string; action: string }; models: Array<{ name: string; action: string; managed: boolean; fields: string[]; changes?: string[]; templates?: Record<string, unknown>; css?: string }> };
@@ -16,7 +17,7 @@ export type CardLearningStatus = "suspended" | "new" | "learning" | "fresh" | "m
 export type CardProgress = { total: number; statuses: Record<CardLearningStatus, number>; dueAutomatic: number; difficultVocab: number };
 export type ModuleTargetProgress = { id: string; kind: "vocab" | "function" | "grammar"; label: string; activated: boolean; cards: CardProgress };
 export type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; attemptedMilestoneIds: string[]; cards: CardProgress; targets: ModuleTargetProgress[] }> };
-export type ActivityView = { id: string; title: string; description?: string; type?: "roleplay" | import("@langtut/domain").ExerciseType; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number; exercise?: { prompt: string; tokens?: string[]; hint?: string } };
+export type ActivityView = { id: string; title: string; description?: string; type?: "roleplay" | import("@langtut/domain").ExerciseType; scenarioTarget?: string; scenarioSource?: string; evidenceTargets?: string[]; roles: Array<{ id: string; label: string; controller: string }>; rounds: number; exercise?: { prompt: string; tokens?: string[]; hint?: string } };
 export type ExerciseAttemptResult = { outcome: "correct" | "near_correct" | "incorrect"; expected: string; feedback: string; completed: boolean };
 export type ActivityTurnView = { roleId: string; roleLabel: string; turn: TutorTurnView };
 export type TutorSessionView = { id: string; status: string; moduleId?: string; activity?: ActivityView; initialTurns?: ActivityTurnView[] };
@@ -38,6 +39,9 @@ export interface LangtutClient {
   overridePlacement(id: string, moduleId: string): Promise<PlacementView>;
   prepareModule(moduleId: string): Promise<Job>;
   createSessionPlan(): Promise<SessionPlan>;
+  dailyPlan(): Promise<DailyPlan | null>;
+  createDailyPlan(): Promise<DailyPlan>;
+  completeDailyTask(planId: string, taskId: string, result: DailyTaskResult): Promise<DailyPlan>;
   startSession(input: { planId?: string; moduleId?: string; activityId?: string }): Promise<TutorSessionView>;
   activityTurn(id: string, message: string): Promise<ActivityTurnResult>;
   submitExercise(id: string, answer: string): Promise<ExerciseAttemptResult>;

@@ -51,6 +51,14 @@ Oberfläche extrahiert die Client-ID und, falls für den Desktop-Token-Tausch n�
 Client-Secret. Das Secret bleibt ausschließlich in der lokalen API-Konfiguration und
 wird weder in Android-Artefakte noch in Drive-Ereignisse oder Logs übernommen.
 
+Nach einer Google-OAuth-Anmeldung kehrt der Systembrowser zur ursprünglich gestarteten
+Langtut-Webapp zurück; eine technische Callback-Erfolgsseite bleibt nicht stehen. Die
+Einstellungen zeigen für jede lokale API-Konfiguration und Verbindung einen
+textlichen, farbcodierten Status: grün für betriebsbereit, gelb für noch ausstehende
+Schritte und rot für nicht eingerichtet oder fehlerhaft.
+Die Anki-Statusanzeige im Kopfbereich löst bei Klick eine erneute
+Erreichbarkeitsprüfung von AnkiConnect aus.
+
 Abgeschlossene oder aktive Placements werden nach einem Neuladen aus SQLite
 wiederhergestellt. „Modul vorbereiten“ autorisiert zugleich die sichere Einrichtung
 fehlender app-eigener Anki-Modelle. Fremde gleichnamige Modelle bleiben geschützt.

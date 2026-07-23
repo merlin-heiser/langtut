@@ -91,6 +91,39 @@ class FakeLocalMt implements LocalMtGateway {
 }
 
 describe("vertical release path with fake integrations", () => {
+  it("persists the next daily action and turns a weak unit into visible rework", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-daily-plan-"));
+    const dbPath = path.join(temporary, "daily.db"); process.env.LANGTUT_DB_PATH = dbPath;
+    const module = (await loadCurriculum(process.cwd())).modules[0];
+    const seed = await Store.open(dbPath, process.cwd()); seed.setStatus("slowakisch-deutsch", module.id, "available"); seed.close();
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models: new FakeModels(module) });
+    const created = (await app.inject({ method: "POST", url: "/api/v1/daily-plan" })).json() as { id: string; tasks: Array<{ id: string; status: string }> };
+    expect(created.tasks).toHaveLength(1); expect(created.tasks[0]).toMatchObject({ id: `prepare:${module.id}`, status: "pending" });
+    const updated = (await app.inject({ method: "POST", url: `/api/v1/daily-plan/${created.id}/tasks/${created.tasks[0].id}/complete`, payload: { result: "incorrect" } })).json() as { tasks: Array<{ status: string; retryOf?: string }> };
+    expect(updated.tasks).toEqual([{ id: `prepare:${module.id}`, kind: "prepare", moduleId: module.id, title: `${module.title} vorbereiten`, evidenceTargets: [], status: "completed", completedWork: 1, expectedWork: 1 }, expect.objectContaining({ status: "pending", retryOf: `prepare:${module.id}` })]);
+    expect((await app.inject({ method: "GET", url: "/api/v1/daily-plan" })).json()).toMatchObject({ id: created.id, tasks: updated.tasks });
+    await app.close();
+  });
+
+  it("returns the browser to the local web app after a cancelled Google OAuth flow", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-oauth-return-"));
+    const dbPath = path.join(temporary, "oauth.db");
+    process.env.LANGTUT_DB_PATH = dbPath;
+    const seed = await Store.open(dbPath, process.cwd());
+    seed.setSetting("google_drive.oauth_client_id", "test.apps.googleusercontent.com");
+    seed.close();
+    const module = (await loadCurriculum(process.cwd())).modules[0];
+    const app = await buildApp(process.cwd(), { anki: new FakeAnkiGateway(), models: new FakeModels(module) });
+    const authorize = await app.inject({ method: "GET", url: "/api/v1/sync/google/authorize?return_to=http%3A%2F%2Flocalhost%3A5173%2Fsettings" });
+    expect(authorize.statusCode).toBe(302);
+    const state = new URL(authorize.headers.location!).searchParams.get("state");
+    const callback = await app.inject({ method: "GET", url: `/api/v1/sync/google/callback?error=access_denied&state=${state}` });
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("http://localhost:5173/settings?google_oauth=failed&google_oauth_error=access_denied");
+    expect((await app.inject({ method: "GET", url: "/api/v1/sync/google/authorize?return_to=https%3A%2F%2Fevil.example" })).statusCode).toBe(400);
+    await app.close();
+  });
+
   it("uses every packaged deterministic exercise as evidence for its declared target", async () => {
     temporary = await mkdtemp(path.join(tmpdir(), "langtut-real-exercises-"));
     process.env.LANGTUT_DB_PATH = path.join(temporary, "exercises.db");
@@ -150,19 +183,21 @@ describe("vertical release path with fake integrations", () => {
     expect(models.vocabularyPrompts[0]).toContain("keine einzelnen Buchstaben oder Zeichen");
     const preparedProgress = (await app.inject({ method: "GET", url: "/api/v1/modules/progress" })).json();
     expect(preparedProgress.modules[module.id]).toMatchObject({ materialPrepared: true, attemptedMilestoneIds: [], targets: expect.any(Array), cards: expect.any(Object) });
+    const greeting = (await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: "ex-flashcard-greeting" } })).json();
+    expect((await app.inject({ method: "POST", url: `/api/v1/sessions/${greeting.id}/exercise-attempts`, payload: { answer: "Dobrý deň" } })).json()).toMatchObject({ outcome: "correct", completed: true });
     const diagnostics = (await readFile(path.join(temporary, "diagnostics/slowakisch-deutsch.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(diagnostics.filter(({ event }) => event === "batch_finished")).toHaveLength(Math.ceil(module.vocabTarget / 40));
     expect(diagnostics.some(({ event, importedTotal }) => event === "batch_finished" && importedTotal === module.vocabTarget)).toBe(true);
     for (const target of preparedProgress.modules[module.id].targets) {
       const response = await app.inject({ method: "POST", url: `/api/v1/modules/${module.id}/targets/${encodeURIComponent(target.id)}/activate` });
-      expect(response.statusCode).toBe(200);
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: "target_activation_requires_session_evidence" });
     }
     const completedProgress = (await app.inject({ method: "GET", url: "/api/v1/modules/progress" })).json();
-    expect(completedProgress.modules[module.id].targets.every((target: { activated: boolean }) => target.activated)).toBe(true);
+    expect(completedProgress.modules[module.id].targets.find((target: { id: string }) => target.id === "target:function:func_greet")).toMatchObject({ activated: true });
     const curriculum = (await app.inject({ method: "GET", url: "/api/v1/curriculum" })).json();
-    expect(curriculum.modules[0].status).toBe("learning");
-    expect(curriculum.modules[1].status).toBe("available");
+    expect(curriculum.modules[0].status).toBe("preparing");
     await app.close();
   });
 

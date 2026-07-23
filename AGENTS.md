@@ -9,6 +9,12 @@
 
 Before changing behaviour, update or add the relevant spec/ADR. Implementation and tests must reference the same requirement in their PR/commit description.
 
+## Scope and implementation default
+
+- Every implementation instruction is app-wide by default. Before implementing, inspect all affected specs, shared domain/runtime components, web/Fastify adapters, Android/Capacitor adapters, UI flows, API contracts and tests.
+- New functional logic belongs exclusively in the shared, platform-neutral core. Platform-specific deviations are allowed only for explicitly specified adapter boundaries such as persistence, OAuth/token acquisition, provider transport, file access and Anki integration.
+- If an instruction is intended to apply only to a specific app, platform, layer or flow, that narrower scope must be stated explicitly; otherwise preserve functional parity across the complete app.
+
 ## Architecture guardrails
 
 - Put domain rules, sync events, Drive file protocol and provider request contracts in `packages/domain` (or a new shared package), never in Android or Fastify only.

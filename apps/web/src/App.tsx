@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Curriculum, CurriculumModule, Job, LexiconLookupResult, LexiconSenseCandidate, SessionPlan } from "@langtut/contracts";
+import type { DailyPlan, DailyTask, DailyTaskResult } from "@langtut/domain";
 import type { ActivityTurnView as ActivityTurn, ActivityView as Activity, ApiCostSummary, CardProgress, ExerciseAttemptResult, LearningPackageView as LearningPackage, LocalMtSettings, ModuleProgress, PackageShelf, PlacementView as Placement, RuntimeSettings as Settings, RuntimeStatus as Status, SetupPreview as Preview, TutorReportView as TutorReport, TutorSessionView as TutorSession } from "@langtut/runtime";
 import { client } from "./api.js";
 import { nativeGoogleDrive } from "./native-google-drive.js";
@@ -7,6 +8,11 @@ import { readGoogleOAuthClientFile } from "./google-oauth.js";
 
 type ModelSettingsResponse = Pick<Settings, "models">;
 type ConversationExchange = { id: string; learner: string; responses: ActivityTurn[]; status: "pending" | "complete" };
+type IntegrationState = "ready" | "pending" | "error";
+
+function IntegrationStatus({ state, children }: { state: IntegrationState; children: string }) {
+  return <p className={`integration-status ${state}`}><span aria-hidden="true" />{children}</p>;
+}
 
 export function App() {
   const [status, setStatus] = useState<Status>();
@@ -14,6 +20,8 @@ export function App() {
   const [curriculum, setCurriculum] = useState<Curriculum>();
   const [moduleProgress, setModuleProgress] = useState<ModuleProgress["modules"]>({});
   const [plan, setPlan] = useState<SessionPlan>();
+  const [dailyPlan, setDailyPlan] = useState<DailyPlan>();
+  const [activeDailyTask, setActiveDailyTask] = useState<DailyTask>();
   const [preview, setPreview] = useState<Preview>();
   const [placement, setPlacement] = useState<Placement>();
   const [answer, setAnswer] = useState("");
@@ -42,18 +50,27 @@ export function App() {
   const [syncing, setSyncing] = useState(false);
   const [googleClientId, setGoogleClientId] = useState("");
   const [importingGoogleOAuth, setImportingGoogleOAuth] = useState(false);
+  const [testingAnki, setTestingAnki] = useState(false);
 
   const reload = async () => {
-    const [nextStatus, nextCosts, nextCurriculum, nextModuleProgress, latestPlacement, latestJob, nextSettings, nextPackages, nextActivities] = await Promise.all([
-      client.status(), client.costs(), client.curriculum(), client.moduleProgress(), client.latestPlacement(), client.latestJob(), client.settings(), client.packages(), client.activities(),
+    const [nextStatus, nextCosts, nextCurriculum, nextModuleProgress, latestPlacement, latestJob, nextSettings, nextPackages, nextActivities, nextDailyPlan] = await Promise.all([
+      client.status(), client.costs(), client.curriculum(), client.moduleProgress(), client.latestPlacement(), client.latestJob(), client.settings(), client.packages(), client.activities(), client.dailyPlan(),
     ]);
     setStatus(nextStatus); setCosts(nextCosts); setCurriculum(nextCurriculum); setPlacement(latestPlacement ?? undefined);
     setModuleProgress(nextModuleProgress.modules);
     setJob(latestJob && latestJob.status !== "completed" ? latestJob : undefined);
     setSettings(nextSettings);
     setPackageShelf(nextPackages); setActivities(nextActivities.activities); setActivityId((selected) => nextActivities.activities.some(({ id }) => id === selected) ? selected : nextActivities.activities[0]?.id);
+    setDailyPlan(nextDailyPlan ?? undefined);
   };
   const refreshCosts = async () => setCosts(await client.costs());
+  const refreshAnkiStatus = async () => {
+    if (testingAnki) return;
+    setTestingAnki(true);
+    try { setStatus(await client.status()); }
+    catch (error) { handleError(error); }
+    finally { setTestingAnki(false); }
+  };
   const handleError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     if (/valid api key must be provided|anki.?connect.*api.?key/i.test(message)) {
@@ -72,6 +89,16 @@ export function App() {
     }).catch(handleError);
   }, []);
   useEffect(() => {
+    const url = new URL(window.location.href);
+    const outcome = url.searchParams.get("google_oauth");
+    if (!outcome) return;
+    const error = url.searchParams.get("google_oauth_error");
+    url.searchParams.delete("google_oauth"); url.searchParams.delete("google_oauth_error");
+    window.history.replaceState({}, "", url);
+    setNotice(outcome === "connected" ? "Google Drive verbunden und abgeglichen." : outcome === "sync_failed" ? `Google Drive verbunden, Abgleich fehlgeschlagen${error ? `: ${error}` : "."}` : `Google-Anmeldung fehlgeschlagen${error ? `: ${error}` : "."}`);
+    void reload().catch(handleError);
+  }, []);
+  useEffect(() => {
     if (!job || ["completed", "failed"].includes(job.status)) return;
     const timer = window.setInterval(async () => {
       const next = await client.job(job.id);
@@ -79,16 +106,25 @@ export function App() {
       await refreshCosts();
       if (["completed", "failed"].includes(next.status)) {
         window.clearInterval(timer);
+        if (next.status === "completed" && activeDailyTask?.kind === "prepare" && dailyPlan) {
+          setDailyPlan(await client.completeDailyTask(dailyPlan.id, activeDailyTask.id, "correct"));
+          setActiveDailyTask(undefined);
+        }
         await reload();
       }
     }, 1200);
     return () => window.clearInterval(timer);
-  }, [job]);
+  }, [job, activeDailyTask, dailyPlan]);
 
-  const current = curriculum?.modules.find((module) => ["available", "preparing"].includes(module.status));
+  const current = curriculum?.modules.find((module) => ["learning", "available", "preparing"].includes(module.status));
+  const nextPlannedTask = dailyPlan && nextDailyTask(dailyPlan);
+  const dayProgress = dailyPlan && dailyPlanProgress(dailyPlan);
   const availableActivities = current?.activityIds?.length ? activities.filter(({ id }) => current.activityIds?.includes(id)) : activities;
   const credited = curriculum?.modules.filter((module) => module.status === "credited").length ?? 0;
   const recoveredAnkiFailure = job?.status === "failed" && status?.anki.reachable && /Anki ist nicht erreichbar|valid api key/i.test(job.error ?? "");
+  const googleOAuthConfigured = Boolean(settings?.sync?.googleOAuthClientId);
+  const driveState: IntegrationState = settings?.sync?.error ? "error" : settings?.sync?.connected ? "ready" : googleOAuthConfigured ? "pending" : "error";
+  const ankiState: IntegrationState = status?.anki.reachable ? "ready" : settings?.anki.configured ? "pending" : "error";
 
   async function startPlacement() { try { setPlacement(await client.startPlacement()); } catch (error) { handleError(error); } }
   async function submitAnswer(value = answer) {
@@ -114,6 +150,18 @@ export function App() {
     setTurns([]); setReport(undefined); setExerciseResult(undefined); setSending(false); setSessionInput("");
   }
   async function startVocabularyLesson(moduleId: string) { setSession(await client.startSession({ moduleId, activityId: "vocab-lesson" })); setSessionInput(""); }
+  async function startDailyTask(task: DailyTask) {
+    if (!dailyPlan) return;
+    if (task.kind === "prepare") { setActiveDailyTask(task); setJob(await client.prepareModule(task.moduleId)); return; }
+    setActiveDailyTask(task);
+    setSession(await client.startSession({ planId: dailyPlan.sessionPlan.id, moduleId: task.moduleId, activityId: task.activityId }));
+    setTurns([]); setReport(undefined); setExerciseResult(undefined); setSending(false); setSessionInput("");
+  }
+  async function finishDailyTask(result: DailyTaskResult) {
+    if (!dailyPlan || !activeDailyTask) return;
+    const updated = await client.completeDailyTask(dailyPlan.id, activeDailyTask.id, result);
+    setDailyPlan(updated); await reload();
+  }
   async function sendTurn() {
     const learner = sessionInput.trim();
     if (!session || !learner || sending || session.status !== "active") return;
@@ -127,6 +175,7 @@ export function App() {
       if (result.completed) {
         setSession((currentSession) => currentSession ? { ...currentSession, status: "completed" } : currentSession);
         setReport(result.report);
+        await finishDailyTask(result.report && result.report.goalCompletionPercent >= 80 ? "correct" : result.report && result.report.goalCompletionPercent >= 40 ? "near_correct" : "incorrect");
       }
       void refreshCosts().catch(handleError);
     } catch (error) {
@@ -140,7 +189,9 @@ export function App() {
   async function submitExercise() {
     if (!session || !sessionInput.trim()) return;
     const result = await client.submitExercise(session.id, sessionInput);
-    setExerciseResult(result); if (result.completed) setSession({ ...session, status: "completed" });
+    setExerciseResult(result);
+    if (activeDailyTask) { await finishDailyTask(result.outcome); setSession({ ...session, status: "completed" }); }
+    else if (result.completed) setSession({ ...session, status: "completed" });
   }
   async function recordMilestone(moduleId: string, milestoneId: string) {
     await client.recordMilestone(moduleId, milestoneId);
@@ -241,7 +292,7 @@ export function App() {
   return <main>
     <header className="hero">
       <div><span className="eyebrow">LANGTUT · LERNPAKET-PLAYER</span><h1>{activePackage?.targetLanguage.name ?? "Sprache"}.<br /><em>{activePackage?.sourceLanguage.name ?? "Lernen"}.</em></h1></div>
-      <div className="hero-actions"><div className="pulse"><span className={status?.anki.reachable ? "dot on" : "dot"} />{status?.anki.reachable ? "Anki verbunden" : "Anki wartet"}</div><div className="cost-counters" title={costs?.trackedSince ? `Erfasst seit ${new Date(costs.trackedSince).toLocaleString("de-DE")}` : "Erfassung beginnt mit dem ersten neuen API-Aufruf"}><span><small>WOCHE</small><b>{formatUsd(costs?.weekCost)}</b></span><span><small>GESAMT</small><b>{formatUsd(costs?.totalCost)}</b></span></div><button className="settings-button" aria-label="Einstellungen öffnen" title="Einstellungen" onClick={() => setScreen(screen === "settings" ? "dashboard" : "settings")}>⚙</button></div>
+      <div className="hero-actions"><button className="pulse anki-status" disabled={testingAnki} onClick={() => void refreshAnkiStatus()} title="AnkiConnect-Erreichbarkeit erneut prüfen"><span className={status?.anki.reachable ? "dot on" : "dot"} />{testingAnki ? "Anki wird geprüft …" : status?.anki.reachable ? "Anki verbunden" : "Anki wartet"}</button><div className="cost-counters" title={costs?.trackedSince ? `Erfasst seit ${new Date(costs.trackedSince).toLocaleString("de-DE")}` : "Erfassung beginnt mit dem ersten neuen API-Aufruf"}><span><small>WOCHE</small><b>{formatUsd(costs?.weekCost)}</b></span><span><small>GESAMT</small><b>{formatUsd(costs?.totalCost)}</b></span></div><button className="settings-button" aria-label="Einstellungen öffnen" title="Einstellungen" onClick={() => setScreen(screen === "settings" ? "dashboard" : "settings")}>⚙</button></div>
     </header>
 
     {notice && <aside className="notice">{notice}</aside>}
@@ -249,9 +300,9 @@ export function App() {
 
     {screen === "settings" && <section className="settings-page">
       <div className="section-title"><span>⚙</span><h2>Einstellungen</h2></div>
-      <article className="settings-card"><div><small>GOOGLE DRIVE</small><h3>Lernstand synchronisieren</h3><p>{settings?.sync?.connected ? `Verbunden · ${settings.sync.pendingEvents} lokale Änderungen ausstehend${settings.sync.lastSyncAt ? ` · letzter Abgleich ${new Date(settings.sync.lastSyncAt).toLocaleString("de-DE")}` : ""}` : "Die Google-Anmeldung erfolgt über den Systembrowser. Drive speichert nur Langtut-Ereignisse im privaten App-Datenbereich."}</p>{settings?.sync?.error && <p className="runtime-warning">{settings.sync.error}</p>}</div><div className="settings-form"><button className="primary" disabled={!settings?.sync?.configured || syncing} onClick={() => void syncNow()}>{syncing ? "Gleicht ab …" : "Jetzt abgleichen"}</button></div></article>
-      <article className="settings-card"><div><small>LLM-DIENSTE</small><h3>Provider-Schlüssel</h3><p>Schlüssel bleiben im lokalen Plattform-Speicher und werden nie an JavaScript oder Drive zurückgegeben.</p></div><div className="settings-form"><label>OpenAI-Schlüssel<input type="password" value={providerKeys.openai} onChange={(event) => setProviderKeys({ ...providerKeys, openai: event.target.value })} autoComplete="off" /></label><button className="primary" disabled={!providerKeys.openai.trim() || savingProvider === "openai"} onClick={() => void saveProviderKey("openai")}>OpenAI speichern</button><label>Gemini-Schlüssel<input type="password" value={providerKeys.gemini} onChange={(event) => setProviderKeys({ ...providerKeys, gemini: event.target.value })} autoComplete="off" /></label><button className="primary" disabled={!providerKeys.gemini.trim() || savingProvider === "gemini"} onClick={() => void saveProviderKey("gemini")}>Gemini speichern</button></div></article>
-      {settings?.anki.mode !== "ankidroid" && <article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article>}
+      <article className="settings-card"><div><small>GOOGLE DRIVE</small><h3>Lernstand synchronisieren</h3><IntegrationStatus state={driveState}>{settings?.sync?.error ? `Fehler: ${settings.sync.error}` : settings?.sync?.connected ? `Verbunden · ${settings.sync.pendingEvents} lokale Änderungen ausstehend${settings.sync.lastSyncAt ? ` · letzter Abgleich ${new Date(settings.sync.lastSyncAt).toLocaleString("de-DE")}` : ""}` : googleOAuthConfigured ? "OAuth eingerichtet · Google-Anmeldung steht noch aus" : "Nicht eingerichtet · OAuth-Datei importieren und mit Google verbinden"}</IntegrationStatus><p>Drive speichert nur Langtut-Ereignisse im privaten App-Datenbereich.</p></div><div className="settings-form"><button className="primary" disabled={!settings?.sync?.configured || syncing} onClick={() => void syncNow()}>{syncing ? "Gleicht ab …" : "Jetzt abgleichen"}</button></div></article>
+      <article className="settings-card"><div><small>LLM-DIENSTE</small><h3>Provider-Schlüssel</h3><IntegrationStatus state={status?.providers.openai?.configured ? "ready" : "error"}>{status?.providers.openai?.configured ? "OpenAI-Schlüssel gespeichert und einsatzbereit" : "OpenAI-Schlüssel fehlt"}</IntegrationStatus><IntegrationStatus state={status?.providers.gemini?.configured ? "ready" : "error"}>{status?.providers.gemini?.configured ? "Gemini-Schlüssel gespeichert und einsatzbereit" : "Gemini-Schlüssel fehlt"}</IntegrationStatus><p>Schlüssel bleiben im lokalen Plattform-Speicher und werden nie an JavaScript oder Drive zurückgegeben.</p></div><div className="settings-form"><label>OpenAI-Schlüssel<input type="password" value={providerKeys.openai} onChange={(event) => setProviderKeys({ ...providerKeys, openai: event.target.value })} autoComplete="off" /></label><button className="primary" disabled={!providerKeys.openai.trim() || savingProvider === "openai"} onClick={() => void saveProviderKey("openai")}>OpenAI speichern</button><label>Gemini-Schlüssel<input type="password" value={providerKeys.gemini} onChange={(event) => setProviderKeys({ ...providerKeys, gemini: event.target.value })} autoComplete="off" /></label><button className="primary" disabled={!providerKeys.gemini.trim() || savingProvider === "gemini"} onClick={() => void saveProviderKey("gemini")}>Gemini speichern</button></div></article>
+      {settings?.anki.mode !== "ankidroid" && <article className="settings-card"><div><small>ANKI CONNECT</small><h3>API-Schlüssel</h3><IntegrationStatus state={ankiState}>{status?.anki.reachable ? "AnkiConnect erreichbar und verbunden" : settings?.anki.configured ? "API-Schlüssel gespeichert · AnkiConnect ist nicht erreichbar" : "Nicht verbunden · AnkiConnect starten oder Schlüssel hinterlegen"}</IntegrationStatus><p>Der Schlüssel wird lokal gespeichert und nicht an die Oberfläche zurückgegeben.</p></div><div className="settings-form"><label>Anki-Connect-Schlüssel<input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Optionaler Anki-Key" autoComplete="off" /></label><button className="primary" disabled={!apiKey.trim() || savingKey} onClick={() => saveApiKey()}>{savingKey ? "Speichert …" : "Schlüssel speichern"}</button></div></article>}
       <article className="settings-card model-settings"><div><small>MODELLWAHL</small><h3>Günstiger starten</h3><p>Wähle je Provider ein Modell. Die Auswahl gilt sofort für alle Aufgaben dieses Providers und wird lokal gespeichert.</p></div><div className="settings-form">{settings?.models && <><label>OpenAI-Modell<select value={settings.models.selection.openai} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, openai: e.target.value } } })}>{settings.models.choices.openai.map((model) => <option key={model}>{model}</option>)}</select></label><label>Gemini-Modell<select value={settings.models.selection.gemini} onChange={(e) => setSettings({ ...settings, models: { ...settings.models, selection: { ...settings.models.selection, gemini: e.target.value } } })}>{settings.models.choices.gemini.map((model) => <option key={model}>{model}</option>)}</select></label><button className="primary" disabled={savingModels} onClick={() => saveModels(settings.models.selection)}>{savingModels ? "Speichert …" : "Modellauswahl speichern"}</button></>}</div></article>
       {settings?.localMt && <LocalMtSettingsCard value={settings.localMt} saving={savingLocalMt} installing={installingLocalMt} onChange={(localMt) => setSettings({ ...settings, localMt })} onSave={saveLocalMt} onInstall={installLocalMt} />}
     </section>}
@@ -264,14 +315,16 @@ export function App() {
       <div className="section-title"><span>01</span><h2>Heute</h2></div>
       <div className="today-grid">
         <article className="mode-card">
-          <small>SESSIONMODUS</small><strong>{plan?.mode ?? "NOCH OFFEN"}</strong>
-          <p>{plan?.reasons[0] ?? "Der deterministische Planner entscheidet aus Reviewlast und Lernstand."}</p>
-          <button disabled={placement?.status !== "completed"} onClick={() => client.createSessionPlan().then(setPlan).catch(handleError)}>Tag planen <span>→</span></button>
+          <small>{dailyPlan ? `TAGESPLAN · ${dailyPlan.sessionPlan.mode}` : "DEIN NÄCHSTER LERNSCHRITT"}</small><strong>{nextPlannedTask ? nextPlannedTask.title : dailyPlan ? "Heute geschafft" : "Tag planen"}</strong>
+          <p>{dailyPlan ? nextPlannedTask ? `Als Nächstes: ${nextPlannedTask.evidenceTargets.length ? `Evidenz für ${nextPlannedTask.evidenceTargets.join(", ")}` : "Material für den Lernweg vorbereiten"}.` : "Alle geplanten und durch Fehler entstandenen Wiederholungen sind erledigt." : "Der Plan richtet sich nach Anki-Last, vorbereitetem Material und offenem Evidenzbedarf."}</p>
+          {dayProgress && <div className="day-progress" aria-label={`Tagesfortschritt ${dayProgress.percent}%`}><span>{dayProgress.completedWork}/{dayProgress.expectedWork} Einheiten · {dayProgress.percent}%</span><i style={{ width: `${dayProgress.percent}%` }} /></div>}
+          {!dailyPlan ? <button disabled={placement?.status !== "completed"} onClick={() => client.createDailyPlan().then(setDailyPlan).catch(handleError)}>Tag planen <span>→</span></button> : nextPlannedTask ? <button onClick={() => startDailyTask(nextPlannedTask).catch(handleError)}>Starte: {nextPlannedTask.title} <span>→</span></button> : <button onClick={() => client.createDailyPlan().then(setDailyPlan).catch(handleError)}>Plan anzeigen <span>→</span></button>}
         </article>
         <article className="metric"><b>{status?.anki.dueReviews ?? "–"}</b><span>fällige Langtut-Reviews</span></article>
         <article className="metric"><b>{credited}</b><span>angerechnete Module</span></article>
         <article className="metric accent"><b>{current?.displayLevel ?? "–"}</b><span>{current?.title ?? "Placement ausstehend"}</span></article>
       </div>
+      {dailyPlan && <ol className="daily-tasks">{dailyPlan.tasks.map((task) => <li className={task.status} key={task.id}><span>{task.status === "completed" ? "✓" : "○"}</span><div><b>{task.title}</b><small>{task.evidenceTargets.length ? task.evidenceTargets.join(" · ") : "Vorbereitung"}{task.retryOf ? " · Wiederholung nach schwächerem Ergebnis" : ""}</small></div>{task.status === "pending" && task.id === nextPlannedTask?.id && <button onClick={() => startDailyTask(task).catch(handleError)}>Starten</button>}</li>)}</ol>}
     </section>
 
     <section>
@@ -297,7 +350,8 @@ export function App() {
     <section>
       <div className="section-title"><span>04</span><h2>Tutor-Session</h2></div>
       {!session && <article className="wide-card"><div><small>GEFÜHRTE PRAXIS</small><h3>Aktiv anwenden, gezielt korrigieren.</h3><p>Das Lernpaket bestimmt Rollen und Ablauf; der Player führt die Methode sicher aus.</p>{availableActivities.length > 0 && <label className="activity-picker">Lernmethode<select value={availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id} onChange={(event) => setActivityId(event.target.value)}>{availableActivities.map((activity) => <option key={activity.id} value={activity.id}>{activity.title} · {activity.roles.length} Rollen</option>)}</select></label>}</div><button disabled={placement?.status !== "completed"} onClick={() => startTutor().catch(handleError)}>Session starten</button></article>}
-      {session && <article className="tutor">
+      {session && <article className={`tutor ${activeDailyTask ? "daily-focus" : ""}`} role={activeDailyTask ? "dialog" : undefined} aria-modal={activeDailyTask ? true : undefined}>
+        {activeDailyTask && <div className="focus-header"><small>HEUTIGE EINHEIT</small><button aria-label="Fokusmodus schließen" onClick={() => { setActiveDailyTask(undefined); setSession(undefined); }}>×</button></div>}
         {session.activity?.type && session.activity.type !== "roleplay" && <div className="scenario"><small>{session.activity.type.replace(/_/g, " ")}</small><h3>{session.activity.title}</h3><p>{session.activity.exercise?.prompt}</p>{session.activity.exercise?.tokens && <p className="tags">{session.activity.exercise.tokens.map((token) => <span key={token}>{token}</span>)}</p>}{session.activity.type === "dictation_light" && <button onClick={() => window.speechSynthesis?.speak(new SpeechSynthesisUtterance(session.activity?.exercise?.hint ? "Dobrý deň" : ""))}>Vorlesen</button>}</div>}
         {session.activity?.type === "roleplay" && <div className="scenario"><small>ROLLENSPIEL</small><h3>{session.activity.title}</h3><p lang={activePackage?.targetLanguage.code}>{session.activity.scenarioTarget}</p><details><summary>Deutsche Erklärung anzeigen</summary><p lang={activePackage?.sourceLanguage.code}>{session.activity.scenarioSource}</p></details></div>}
         <div className="dialogue" aria-busy={sending}>
@@ -317,6 +371,7 @@ export function App() {
         </> : <div className="answer chat-input completed-input"><input disabled placeholder="Konversation abgeschlossen" /><button disabled>Senden</button></div>}
         {exerciseResult && <div className={`report ${exerciseResult.outcome}`}><p>{exerciseResult.feedback}</p><p>Lösung: <b>{exerciseResult.expected}</b></p></div>}
         {report && <div className="report"><small>SESSIONBERICHT</small><h3>Beobachtete Lernsignale</h3><p className="goal-score">Lernzielerfüllung: <b>{report.goalCompletionPercent}%</b>{report.languageSwitches > 0 && <> · Sprachwechsel: <b>{report.languageSwitches}</b></>}</p><p>{report.observedErrors.join(" · ") || "Keine belastbaren Fehler beobachtet."}</p>{report.observedStrengths.length > 0 && <p>Stärken: {report.observedStrengths.join(" · ")}</p>}<div className="tags">{report.focusTags.map((tag) => <span key={tag}>{tag}</span>)}</div><p>Nächster Schritt: {report.nextSessionSuggestions.join(" · ")}</p></div>}
+        {activeDailyTask && session.status !== "active" && <button className="next-day-action" onClick={() => { setActiveDailyTask(undefined); setSession(undefined); setTurns([]); setReport(undefined); setExerciseResult(undefined); }}>Fortschritt ansehen und nächste Einheit wählen →</button>}
       </article>}
     </section>
 
@@ -414,4 +469,12 @@ function ProgressBar({ progress }: { progress?: CardProgress }) {
   if (!progress?.total) return <small className="progress-empty">Noch keine Karten eingesetzt</small>;
   const learned = progress.statuses.learning + progress.statuses.fresh + progress.statuses.mature;
   return <div className="progress-bar" aria-label={`${learned} von ${progress.total} Karten lernend oder wiederholt`}><i style={{ width: `${learned / progress.total * 100}%` }} /></div>;
+}
+
+function nextDailyTask(plan: DailyPlan): DailyTask | undefined { return plan.tasks.find((task) => task.status === "pending"); }
+function dailyPlanProgress(plan: DailyPlan) {
+  const completedWork = plan.tasks.reduce((total, task) => total + task.completedWork, 0);
+  const expectedWork = plan.tasks.reduce((total, task) => total + task.expectedWork, 0);
+  const remainingTasks = plan.tasks.filter((task) => task.status === "pending").length;
+  return { completedWork, expectedWork, percent: expectedWork ? Math.round(completedWork / expectedWork * 100) : 100, remainingTasks };
 }

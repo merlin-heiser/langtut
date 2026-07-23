@@ -7,7 +7,7 @@ import multipart from "@fastify/multipart";
 import type { LearnerProfile, LexiconLookupRequest, LexiconStagingRequest, PlacementEvaluation, SessionAnalysis, TutorReport, TutorTurn } from "@langtut/contracts";
 import {
   DEFAULT_PACKAGE_ID, LearningPackageRepository, applyProgress, createSessionPlan, deriveModuleStatus,
-  nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, evaluateExercise, targetActivationId, type LearningActivity, type LoadedLearningPackage,
+  completeDailyTask, localDay, nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, evaluateExercise, targetActivationId, type DailyPlan, type DailyTask, type DailyTaskResult, type LearningActivity, type LoadedLearningPackage,
   type PlacementItemDefinition,
 } from "@langtut/domain";
 import { AnkiClient, type AnkiGateway } from "./anki.js";
@@ -148,19 +148,31 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (clientSecret) store.setSetting("google_drive.oauth_client_secret", clientSecret);
     return { googleOAuthClientId: clientId };
   });
-  app.get("/api/v1/sync/google/authorize", async (_request, reply) => {
+  app.get<{ Querystring: { return_to?: string } }>("/api/v1/sync/google/authorize", async (request, reply) => {
     const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
     if (!clientId) return reply.code(409).send({ error: "google_oauth_client_id_required" });
+    const returnUrl = validGoogleOAuthReturnUrl(request.query.return_to);
+    if (!returnUrl) return reply.code(400).send({ error: "google_oauth_return_url_required" });
     const state = randomUUID(); const verifier = randomBytes(48).toString("base64url");
     const challenge = createHash("sha256").update(verifier).digest("base64url");
     const redirectUri = `http://127.0.0.1:${config.port}/api/v1/sync/google/callback`;
-    store.setSetting("google_drive.oauth_pending", { state, verifier, redirectUri, createdAt: new Date().toISOString() });
+    store.setSetting("google_drive.oauth_pending", { state, verifier, redirectUri, returnUrl, createdAt: new Date().toISOString() });
     const query = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: "code", scope: "https://www.googleapis.com/auth/drive.appdata", code_challenge: challenge, code_challenge_method: "S256", state, access_type: "offline", prompt: "consent" });
     return reply.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${query}`);
   });
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>("/api/v1/sync/google/callback", async (request, reply) => {
-    const pending = store.getSetting<{ state: string; verifier: string; redirectUri: string }>("google_drive.oauth_pending");
-    if (request.query.error || !request.query.code || !pending || request.query.state !== pending.state) return reply.code(400).type("text/html").send("<h1>Google-Anmeldung fehlgeschlagen</h1><p>Bitte dieses Fenster schließen und Langtut erneut öffnen.</p>");
+    const pending = store.getSetting<{ state: string; verifier: string; redirectUri: string; returnUrl?: string }>("google_drive.oauth_pending");
+    const returnToApp = (outcome: "connected" | "failed" | "sync_failed", error?: string) => {
+      if (!pending?.returnUrl) return undefined;
+      const url = new URL(pending.returnUrl);
+      url.searchParams.set("google_oauth", outcome);
+      if (error) url.searchParams.set("google_oauth_error", error);
+      return reply.redirect(url.toString());
+    };
+    if (request.query.error || !request.query.code || !pending || request.query.state !== pending.state) {
+      store.deleteSetting("google_drive.oauth_pending");
+      return returnToApp("failed", request.query.error) ?? reply.code(400).type("text/html").send("<h1>Google-Anmeldung fehlgeschlagen</h1>");
+    }
     const clientId = store.getSetting<string>("google_drive.oauth_client_id") ?? config.googleOAuthClientId;
     const clientSecret = store.getSetting<string>("google_drive.oauth_client_secret") ?? config.googleOAuthClientSecret;
     const form = new URLSearchParams({ code: request.query.code, client_id: clientId!, redirect_uri: pending.redirectUri, grant_type: "authorization_code", code_verifier: pending.verifier });
@@ -168,9 +180,9 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form });
     const token = await tokenResponse.json() as { access_token?: string; refresh_token?: string; error?: string; error_description?: string };
     store.deleteSetting("google_drive.oauth_pending");
-    if (!tokenResponse.ok || !token.access_token) return reply.code(400).type("text/html").send(`<h1>Google-Anmeldung fehlgeschlagen</h1><p>${escapeHtml(token.error_description ?? token.error ?? "Unbekannter Fehler")}</p>`);
+    if (!tokenResponse.ok || !token.access_token) return returnToApp("failed", token.error_description ?? token.error) ?? reply.code(400).type("text/html").send(`<h1>Google-Anmeldung fehlgeschlagen</h1><p>${escapeHtml(token.error_description ?? token.error ?? "Unbekannter Fehler")}</p>`);
     driveSync.configureAccessToken(token.access_token, token.refresh_token); const result = await driveSync.sync();
-    return reply.type("text/html").send(result.error ? `<h1>Google verbunden, Sync fehlgeschlagen</h1><p>${escapeHtml(result.error)}</p>` : "<h1>Google Drive verbunden</h1><p>Du kannst dieses Fenster schließen und zu Langtut zurückkehren.</p>");
+    return returnToApp(result.error ? "sync_failed" : "connected", result.error) ?? reply.type("text/html").send(result.error ? `<h1>Google verbunden, Sync fehlgeschlagen</h1><p>${escapeHtml(result.error)}</p>` : "<h1>Google Drive verbunden</h1>");
   });
   // Native clients can also obtain OAuth tokens through their own system-browser flow.
   app.post<{ Body: { accessToken?: string } }>("/api/v1/sync/google/token", async (request, reply) => {
@@ -242,20 +254,8 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === request.params.id);
     if (!module) return reply.code(404).send({ error: "unknown_module" });
     const targetId = request.params.targetId;
-    const target = moduleTargets(module, []).find((value) => value.id === targetId);
-    if (!target) return reply.code(400).send({ error: "unknown_target" });
-    const imported = target.kind === "vocab"
-      ? store.importedItems<any>(activePackageId, module.id, "vocab")
-      : target.kind === "function"
-        ? store.importedItems<any>(activePackageId, module.id, "chunk").filter(({ item }) => targetId === targetActivationId("function", item.functionId))
-        : store.importedItems<any>(activePackageId, module.id, "rule").filter(({ item }) => targetId === targetActivationId("grammar", item.milestoneId));
-    if (!imported.length) return reply.code(409).send({ error: "target_material_not_prepared" });
-    await anki.activateNotes?.(imported.flatMap(({ ankiNoteId }) => ankiNoteId ? [ankiNoteId] : []));
-    const evidence = store.getEvidence(activePackageId, module.id);
-    evidence.attemptedMilestones = [...new Set([...evidence.attemptedMilestones, targetId])];
-    const status = deriveModuleStatus(module.status, module, evidence);
-    store.saveEvidence(activePackageId, module.id, evidence, status);
-    return { packageId: activePackageId, moduleId: module.id, targetId, status };
+    if (!moduleTargets(module, []).some((value) => value.id === targetId)) return reply.code(400).send({ error: "unknown_target" });
+    return reply.code(409).send({ error: "target_activation_requires_session_evidence" });
   });
   app.get("/api/v1/curriculum/next", async () => nextAvailableModule(await refreshCurriculum()));
   app.get("/api/v1/activities", async () => ({ packageId: activePackageId, activities: active().activities.map(publicActivity) }));
@@ -263,6 +263,37 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const curriculum = await refreshCurriculum();
     const plan = createSessionPlan(await anki.metrics(), nextAvailableModule(curriculum), config.planner, activePackageId);
     store.savePlan(plan); return reply.code(201).send(plan);
+  });
+  app.get("/api/v1/daily-plan", async () => store.getSetting<DailyPlan>(dailyPlanKey(activePackageId)) ?? null);
+  app.post("/api/v1/daily-plan", async (_request, reply) => {
+    const key = dailyPlanKey(activePackageId);
+    const existing = store.getSetting<DailyPlan>(key);
+    if (existing) return existing;
+    const curriculum = await refreshCurriculum();
+    const module = curriculum.modules.find((candidate) => ["learning", "preparing", "available"].includes(candidate.status));
+    const sessionPlan = createSessionPlan(await anki.metrics(), module ?? nextAvailableModule(curriculum), config.planner, activePackageId);
+    store.savePlan(sessionPlan);
+    const now = new Date().toISOString();
+    const plan: DailyPlan = { id: `daily:${activePackageId}:${localDay()}`, packageId: activePackageId, date: localDay(), sessionPlan, tasks: module ? dailyTasks(module, store.getEvidence(activePackageId, module.id), active().activities) : [], createdAt: now, updatedAt: now };
+    store.setSetting(key, plan);
+    return reply.code(201).send(plan);
+  });
+  app.post<{ Params: { planId: string; taskId: string }; Body: { result?: DailyTaskResult } }>("/api/v1/daily-plan/:planId/tasks/:taskId/complete", async (request, reply) => {
+    const key = dailyPlanKey(activePackageId); const plan = store.getSetting<DailyPlan>(key);
+    if (!plan || plan.id !== request.params.planId) return reply.code(404).send({ error: "daily_plan_not_found" });
+    const result = request.body?.result;
+    if (result !== "correct" && result !== "near_correct" && result !== "incorrect") return reply.code(400).send({ error: "invalid_daily_task_result" });
+    let updated = completeDailyTask(plan, request.params.taskId, result);
+    const completedTask = plan.tasks.find((task) => task.id === request.params.taskId);
+    if (result === "correct" && completedTask?.kind === "prepare") {
+      const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === completedTask.moduleId);
+      if (module) {
+        const followUps = dailyTasks(module, store.getEvidence(activePackageId, module.id), active().activities).filter((task) => task.kind !== "prepare" && !updated.tasks.some((existing) => existing.id === task.id));
+        updated = { ...updated, tasks: [...updated.tasks, ...followUps], updatedAt: new Date().toISOString() };
+      }
+    }
+    store.setSetting(key, updated);
+    return updated;
   });
   app.post<{ Params: { id: string } }>("/api/v1/modules/:id/prepare", async (request, reply) => {
     const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === request.params.id);
@@ -274,12 +305,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === request.params.id);
     if (!module) return reply.code(404).send({ error: "unknown_module" });
     if (!module.grammarMilestones.some((milestone) => milestone.id === request.params.milestoneId)) return reply.code(400).send({ error: "unknown_milestone" });
-    const evidence = store.getEvidence(activePackageId, module.id);
-    evidence.attemptedMilestones = [...new Set([...evidence.attemptedMilestones, request.params.milestoneId])];
-    const status = deriveModuleStatus(module.status, module, evidence);
-    store.saveEvidence(activePackageId, module.id, evidence, status);
-    await anki.syncModuleAvailability?.(activePackageId, Object.entries(store.getProgress(activePackageId)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
-    return { packageId: activePackageId, moduleId: module.id, status, evidence };
+    return reply.code(409).send({ error: "milestone_requires_activity_evidence" });
   });
 
   app.get("/api/v1/jobs/latest", async () => store.getLatestJob(activePackageId));
@@ -348,12 +374,13 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   });
 
   app.post<{ Body: { planId?: string; moduleId?: string; activityId?: string } }>("/api/v1/sessions", async (request, reply) => {
-    const pkg = active(); const activity = request.body?.activityId ? pkg.activities.find(({ id }) => id === request.body.activityId) : pkg.activities[0];
+    const pkg = active(); const module = (await refreshCurriculum()).modules.find(({ id }) => id === request.body?.moduleId);
+    const vocabularyLesson = request.body?.activityId === "vocab-lesson" && module ? vocabularyLessonActivity(module) : undefined;
+    const activity = vocabularyLesson ?? (request.body?.activityId ? pkg.activities.find(({ id }) => id === request.body?.activityId) : pkg.activities[0]);
     if (request.body?.activityId && !activity) return reply.code(400).send({ error: "unknown_activity" });
-    const module = (await refreshCurriculum()).modules.find(({ id }) => id === request.body?.moduleId);
-    if (activity && module?.activityIds?.length && !module.activityIds.includes(activity.id)) return reply.code(400).send({ error: "activity_not_available_for_module" });
+    if (!vocabularyLesson && activity && module?.activityIds?.length && !module.activityIds.includes(activity.id)) return reply.code(400).send({ error: "activity_not_available_for_module" });
     const id = randomUUID(); store.createSession(activePackageId, id, request.body?.planId ?? null, request.body?.moduleId ?? null, activity?.id);
-    if (module) {
+    if (module && activity?.evidenceTargets?.[0] !== "vocab") {
       const evidenceTarget = activity?.evidenceTargets?.[0];
       const cardId = await anki.nextAutomaticCard?.(activePackageId, module.id, evidenceTarget);
       if (cardId) store.appendSessionEvent(id, "automatic_card_scheduled", { cardId, target: evidenceTarget });
@@ -370,12 +397,13 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   app.post<{ Params: { id: string }; Body: { answer?: string } }>("/api/v1/sessions/:id/exercise-attempts", async (request, reply) => {
     const session = store.getSession(request.params.id); if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_exercise_not_found" });
     const start = store.getSessionEvents(request.params.id).find(({ eventType }) => eventType === "session_started")?.payload as { activityId?: string } | undefined;
-    const activity = active().activities.find(({ id }) => id === start?.activityId);
+    const module = (await refreshCurriculum()).modules.find(({ id }) => id === session.moduleId);
+    const activity = start?.activityId === "vocab-lesson" && module ? vocabularyLessonActivity(module) : active().activities.find(({ id }) => id === start?.activityId);
     if (!activity?.exercise || activity.type === "roleplay") return reply.code(409).send({ error: "session_is_not_an_exercise" });
     const result = evaluateExercise(request.body?.answer ?? "", activity.exercise);
     store.appendSessionEvent(request.params.id, "exercise_attempt", { activityId: activity.id, outcome: result.outcome, evidenceTargets: activity.evidenceTargets ?? [] });
     await gradeScheduledExerciseCard(request.params.id, result.outcome);
-    if (result.outcome === "correct") store.completeSession(request.params.id, fallbackTutorReport(activity.focusTags ?? [], {}, { languageSwitches: 0, goalCompletionPercent: 100 }));
+    if (result.outcome === "correct") { await applyActivityEvidence(request.params.id, activity, module); store.completeSession(request.params.id, fallbackTutorReport(activity.focusTags ?? [], {}, { languageSwitches: 0, goalCompletionPercent: 100 })); }
     return { ...result, completed: result.outcome === "correct" };
   });
   app.post<{ Params: { id: string }; Body: { message: string } }>("/api/v1/sessions/:id/activity-turns", async (request, reply) => {
@@ -407,8 +435,8 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   async function completeActiveSession(sessionId: string, session: Record<string, unknown>, logger: { warn: (...args: any[]) => void }): Promise<TutorReport> {
     const pkg = active(); const events = store.getSessionEvents(sessionId);
     const start = events.find(({ eventType }) => eventType === "session_started")?.payload as { activityId?: string } | undefined;
-    const activity = pkg.activities.find(({ id }) => id === start?.activityId) ?? pkg.activities[0] ?? fallbackActivity();
     const module = (await refreshCurriculum()).modules.find(({ id }) => id === session.moduleId);
+    const activity: LearningActivity = (start?.activityId === "vocab-lesson" && module ? vocabularyLessonActivity(module) : undefined) ?? pkg.activities.find(({ id }) => id === start?.activityId) ?? pkg.activities[0] ?? fallbackActivity();
     const plan = session.planId ? store.getPlan(String(session.planId)) : null;
     const transcript = transcriptFromEvents(events, activity);
     const errorCounts = aggregateErrorTags(events);
@@ -426,10 +454,10 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
       await writeRapportAtomic(dataRoot, pkg.manifest.id, analysis.rapportMarkdown);
       store.setSetting(`rapport.profile.${pkg.manifest.id}`, analysis.profile);
       const report = { ...analysis.report, languageSwitches: learningSignals.languageSwitches, goalCompletionPercent: learningSignals.goalCompletionPercent };
-      store.completeSession(sessionId, report);
+      await applyActivityEvidence(sessionId, activity, module); store.completeSession(sessionId, report);
       return report;
     } catch (error) {
-      store.completeSession(sessionId, fallback);
+      await applyActivityEvidence(sessionId, activity, module); store.completeSession(sessionId, fallback);
       logger.warn({ err: error }, "Session completed without rapport update");
       return fallback;
     }
@@ -508,6 +536,43 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
     const profile = store.getSetting<LearnerProfile>(`rapport.profile.${pkg.manifest.id}`);
     return buildLearnerContext(profile, [activity.title, ...(activity.focusTags ?? []), module?.title ?? "", ...(module?.focusTags ?? []), ...(module?.functions ?? [])]);
   }
+  function vocabularyLessonActivity(module: Awaited<ReturnType<typeof refreshCurriculum>>["modules"][number]): LearningActivity | undefined {
+    const item = store.importedItems<{ source: string; target: string }>(activePackageId, module.id, "vocab")[0]?.item;
+    if (!item) return undefined;
+    return { id: "vocab-lesson", title: "Vokabel-Lektion", type: "flashcards_translation", description: "Aktiviere vorbereiteten Wortschatz; die Bewertung bleibt in deiner Anki-Session.", focusTags: module.focusTags, evidenceTargets: ["vocab"], roles: [{ id: "system", label: "Aufgabe", controller: "fixed", message: "Vokabel-Lektion" }, { id: "learner", label: "Lernender", controller: "learner" }], turnOrder: ["system", "learner"], rounds: 1, exercise: { prompt: `Übersetze ins ${active().manifest.targetLanguage.name}: ${item.source}`, answers: [item.target] } };
+  }
+  function dailyTasks(module: Awaited<ReturnType<typeof refreshCurriculum>>["modules"][number], evidence: import("@langtut/domain").ModuleEvidence, activities: LearningActivity[]): DailyTask[] {
+    if (!preparationComplete(module, evidence)) return [{ id: `prepare:${module.id}`, kind: "prepare", moduleId: module.id, title: `${module.title} vorbereiten`, evidenceTargets: [], status: "pending", completedWork: 0, expectedWork: 1 }];
+    const tasks: DailyTask[] = [];
+    if (!evidence.attemptedMilestones.includes(targetActivationId("vocab"))) tasks.push({ id: `vocab:${module.id}`, kind: "vocabulary_lesson", moduleId: module.id, title: "Vokabel-Lektion", activityId: "vocab-lesson", evidenceTargets: ["vocab"], status: "pending", completedWork: 0, expectedWork: 1 });
+    for (const activity of activities.filter((candidate) => candidate.moduleIds?.includes(module.id) && candidate.evidenceTargets?.some((target) => !evidence.attemptedMilestones.includes(toTargetId(target))))) {
+      tasks.push({ id: `exercise:${module.id}:${activity.id}`, kind: "exercise", moduleId: module.id, title: activity.title, activityId: activity.id, evidenceTargets: activity.evidenceTargets ?? [], status: "pending", completedWork: 0, expectedWork: 1 });
+    }
+    return tasks;
+  }
+  async function applyActivityEvidence(sessionId: string, activity: LearningActivity, module: Awaited<ReturnType<typeof refreshCurriculum>>["modules"][number] | undefined): Promise<void> {
+    if (!module || !activity.evidenceTargets?.length) return;
+    const evidence = store.getEvidence(activePackageId, module.id);
+    const activated = [...evidence.attemptedMilestones];
+    for (const sourceTarget of activity.evidenceTargets) {
+      const targetId = toTargetId(sourceTarget);
+      if (activated.includes(targetId)) continue;
+      const target = moduleTargets(module, []).find((candidate) => candidate.id === targetId);
+      if (!target) continue;
+      const imported = target.kind === "vocab"
+        ? store.importedItems<any>(activePackageId, module.id, "vocab")
+        : target.kind === "function"
+          ? store.importedItems<any>(activePackageId, module.id, "chunk").filter(({ item }) => targetId === targetActivationId("function", item.functionId))
+          : store.importedItems<any>(activePackageId, module.id, "rule").filter(({ item }) => targetId === targetActivationId("grammar", item.milestoneId));
+      if (!imported.length) continue;
+      await anki.activateNotes?.(imported.flatMap(({ ankiNoteId }) => ankiNoteId ? [ankiNoteId] : []));
+      activated.push(targetId); store.appendSessionEvent(sessionId, "target_activated_from_evidence", { targetId, evidenceTarget: sourceTarget });
+    }
+    if (activated.length === evidence.attemptedMilestones.length) return;
+    evidence.attemptedMilestones = [...new Set(activated)];
+    store.saveEvidence(activePackageId, module.id, evidence, deriveModuleStatus(module.status, module, evidence));
+    await anki.syncModuleAvailability?.(activePackageId, Object.entries(store.getProgress(activePackageId)).filter(([, status]) => status === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
+  }
   async function applyPlacementStart(moduleId: string) {
     const curriculum = await refreshCurriculum(); const index = curriculum.modules.findIndex((module) => module.id === moduleId); if (index < 0) return;
     curriculum.modules.forEach((module, moduleIndex) => store.setStatus(activePackageId, module.id, moduleIndex < index ? "credited" : moduleIndex === index ? "available" : "locked"));
@@ -516,6 +581,8 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
 }
 
 function fallbackActivity(): LearningActivity { return { id: "conversation", title: "Konversation", roles: [{ id: "learner", label: "Lernender", controller: "learner" }, { id: "tutor", label: "Tutor", controller: "llm", prompt: "tutor_conversation" }], turnOrder: ["learner", "tutor"], rounds: 8 }; }
+function dailyPlanKey(packageId: string): string { return `daily_plan:${packageId}:${localDay()}`; }
+function toTargetId(value: string): string { const [kind, id] = value.split(":", 2); return kind === "vocab" ? targetActivationId("vocab") : kind === "function" ? targetActivationId("function", id) : kind === "grammar" ? targetActivationId("grammar", id) : value; }
 function emptyCardProgress() { return { total: 0, statuses: { suspended: 0, new: 0, learning: 0, fresh: 0, mature: 0 }, dueAutomatic: 0, difficultVocab: 0 }; }
 function moduleTargets(module: { functions: string[]; grammarMilestones: Array<{ id: string; description: string }> }, activated: string[]) { return [{ id: targetActivationId("vocab"), kind: "vocab" as const, label: "Wortschatz" }, ...module.functions.map((id) => ({ id: targetActivationId("function", id), kind: "function" as const, label: id })), ...module.grammarMilestones.map(({ id, description }) => ({ id: targetActivationId("grammar", id), kind: "grammar" as const, label: description }))].map((target) => ({ ...target, activated: activated.includes(target.id), cards: emptyCardProgress() })); }
 function publicActivity(activity: LearningActivity) { const { exercise, ...value } = activity; return exercise ? { ...value, exercise: { prompt: exercise.prompt, tokens: exercise.tokens, hint: exercise.hint } } : value; }
@@ -525,3 +592,10 @@ function publicPlacementWithNext(placement: PlacementState, items: PlacementItem
 
 function fallbackTutorReport(focusTags: string[], errorCounts: Record<string, number>, signals: { languageSwitches: number; goalCompletionPercent: number }): TutorReport { return { focusTags, observedErrors: Object.entries(errorCounts).map(([tag, count]) => `${tag} (${count})`), observedStrengths: [], languageSwitches: signals.languageSwitches, goalCompletionPercent: signals.goalCompletionPercent, suggestedReviewItems: [], suggestedNewCards: [], nextSessionSuggestions: [] }; }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
+function validGoogleOAuthReturnUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? url.toString() : undefined;
+  } catch { return undefined; }
+}
