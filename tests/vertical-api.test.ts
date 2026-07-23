@@ -17,12 +17,16 @@ class FakeAnkiGateway implements AnkiGateway {
   notes: CandidateItem[] = [];
   removedNoteIds: number[] = [];
   setupApplications = 0;
+  automaticRequests: Array<{ moduleId: string; target?: string }> = [];
+  automaticGrades: Array<{ cardId: number; outcome: "good" | "again" }> = [];
   async metrics(): Promise<AnkiMetrics> { return { reachable: true, dueReviews: 0, newCards: 0, leeches: 0, lapses7d: 0, version: 6 }; }
   async setupPreview(): Promise<SetupPreview> { return { deck: { name: "test", action: "none" }, models: [] }; }
   async applySetup(): Promise<SetupPreview> { this.setupApplications++; return this.setupPreview(); }
   async addItems(items: CandidateItem[]): Promise<Array<number | null>> { this.notes.push(...items); return items.map((_, index) => this.notes.length + index + 1); }
   async removeNotes(noteIds: number[]): Promise<void> { this.removedNoteIds.push(...noteIds); }
   async syncModuleAvailability(): Promise<void> {}
+  async nextAutomaticCard(_packageId: string, moduleId: string, target?: string): Promise<number | null> { this.automaticRequests.push({ moduleId, target }); return this.automaticRequests.length; }
+  async gradeAutomaticCard(cardId: number, outcome: "good" | "again"): Promise<boolean> { this.automaticGrades.push({ cardId, outcome }); return true; }
 }
 
 class FakeModels implements ModelGateway {
@@ -87,6 +91,25 @@ class FakeLocalMt implements LocalMtGateway {
 }
 
 describe("vertical release path with fake integrations", () => {
+  it("uses every packaged deterministic exercise as evidence for its declared target", async () => {
+    temporary = await mkdtemp(path.join(tmpdir(), "langtut-real-exercises-"));
+    process.env.LANGTUT_DB_PATH = path.join(temporary, "exercises.db");
+    const module = (await loadCurriculum(process.cwd())).modules[0];
+    const anki = new FakeAnkiGateway();
+    const app = await buildApp(process.cwd(), { anki, models: new FakeModels(module) });
+    const pkg = await (await import("../packages/domain/src/index.js")).loadLearningPackage(path.join(process.cwd(), "learning-packages", "slowakisch-deutsch"));
+    const exercises = pkg.activities.filter((activity) => activity.type && activity.type !== "roleplay");
+    for (const activity of exercises) {
+      const started = (await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { moduleId: module.id, activityId: activity.id } })).json();
+      const response = await app.inject({ method: "POST", url: `/api/v1/sessions/${started.id}/exercise-attempts`, payload: { answer: activity.exercise!.answers[0] } });
+      expect(response.json()).toMatchObject({ outcome: "correct", completed: true });
+    }
+    expect(anki.automaticRequests.map(({ target }) => target)).toEqual(exercises.map((activity) => activity.evidenceTargets![0]));
+    expect(anki.automaticGrades).toHaveLength(exercises.length);
+    expect(anki.automaticGrades.every(({ outcome }) => outcome === "good")).toBe(true);
+    await app.close();
+  });
+
   it("exposes, configures and installs the opt-in local MT provider", async () => {
     temporary = await mkdtemp(path.join(tmpdir(), "langtut-local-mt-api-"));
     process.env.LANGTUT_DB_PATH = path.join(temporary, "local-mt.db");
