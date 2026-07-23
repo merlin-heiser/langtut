@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { LearningPackageRepository, loadLearningPackage } from "@langtut/domain";
+import { LearningPackageRepository, evaluateExercise, loadLearningPackage } from "@langtut/domain";
 import { rolesAfterLearner, rolesBeforeLearner } from "../apps/api/src/app.js";
 import { Store } from "../apps/api/src/database.js";
 import { ContentPipeline } from "../apps/api/src/content-pipeline.js";
@@ -24,9 +24,16 @@ describe("learning packages", () => {
     expect(rolesBeforeLearner(pkg.activities[0])).toEqual([]);
     expect(pkg.prompts.tutor_conversation).toContain("assigned conversation role");
     const slovak = await loadLearningPackage(path.join(process.cwd(), "learning-packages", "slowakisch-deutsch"));
-    expect(slovak.activities.every(({ type, scenarioTarget, scenarioSource }) => type === "roleplay" && scenarioTarget && scenarioSource)).toBe(true);
-    expect(rolesBeforeLearner(slovak.activities[0])).toEqual(["clerk"]);
+    expect(slovak.activities.filter(({ type }) => type !== "roleplay")).toHaveLength(6);
+    expect(slovak.activities.find(({ id }) => id === "rp-spelling-desk")?.scenarioTarget).toBeTruthy();
     expect(slovak.curriculum.modules.find(({ id }) => id === "a1_food_restaurant")?.activityIds).toContain("rp-restaurant");
+  });
+
+  it("scores exact and missing-diacritic exercise answers deterministically", () => {
+    const definition = { prompt: "", answers: ["Dobrý deň"] };
+    expect(evaluateExercise("Dobrý deň", definition).outcome).toBe("correct");
+    expect(evaluateExercise("Dobry den", definition).outcome).toBe("near_correct");
+    expect(evaluateExercise("Ahoj", definition).outcome).toBe("incorrect");
   });
 
   it("installs a zip and updates the same package id", async () => {

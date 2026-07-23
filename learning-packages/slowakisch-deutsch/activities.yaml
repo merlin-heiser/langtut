@@ -1,4 +1,58 @@
 activities:
+  - id: ex-flashcard-greeting
+    title: "Übersetzungs-Flashcard: Guten Tag"
+    type: flashcards_translation
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [func_greet]
+    roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [system, learner]
+    rounds: 1
+    exercise: { prompt: "Übersetze ins Slowakische: Guten Tag", answers: ["Dobrý deň"], hint: "formelle Begrüßung" }
+  - id: ex-gap-greeting
+    title: "Lückentext: Begrüßung"
+    type: gap_fill
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [func_greet]
+    roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [system, learner]
+    rounds: 1
+    exercise: { prompt: "Ergänze: Dobrý ___.", answers: ["deň"] }
+  - id: ex-build-question
+    title: "Satzbau: einfache Frage"
+    type: sentence_building
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [func_ask_info]
+    roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [system, learner]
+    rounds: 1
+    exercise: { prompt: "Bilde einen Satz aus den Bausteinen.", tokens: ["Ako", "sa", "voláš", "?"], answers: ["Ako sa voláš?"] }
+  - id: ex-declension-pronoun
+    title: "Deklination: Personalpronomen"
+    type: declension_drills
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [grammar_pronunciation]
+    roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [system, learner]
+    rounds: 1
+    exercise: { prompt: "Ergänze: ___ som Anna. (ich)", answers: ["Ja"] }
+  - id: ex-conjugation-byt
+    title: "Konjugation: byť"
+    type: conjugation_drills
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [func_introduce]
+    roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [system, learner]
+    rounds: 1
+    exercise: { prompt: "Ergänze: Ja ___ Anna. (byť)", answers: ["som"] }
+  - id: ex-dictation-greeting
+    title: "Diktat: Begrüßung"
+    type: dictation_light
+    moduleIds: [a0_alphabet_pronunciation]
+    focusTags: [func_greet]
+    roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
+    turnOrder: [system, learner]
+    rounds: 1
+    exercise: { prompt: "Tippe den vorgelesenen Satz.", answers: ["Dobrý deň"], hint: "Diktat kann wiederholt werden" }
   - id: rp-spelling-desk
     title: Pri informačnom pulte
     type: roleplay

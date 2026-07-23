@@ -5,3 +5,4 @@ export * from "./quality.js";
 export * from "./learning-package.js";
 export * from "./sync.js";
 export * from "./google-drive.js";
+export * from "./exercises.js";

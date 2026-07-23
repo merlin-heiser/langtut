@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Curriculum, CurriculumModule, Job, LexiconLookupResult, LexiconSenseCandidate, SessionPlan } from "@langtut/contracts";
-import type { ActivityTurnView as ActivityTurn, ActivityView as Activity, ApiCostSummary, LearningPackageView as LearningPackage, LocalMtSettings, ModuleProgress, PackageShelf, PlacementView as Placement, RuntimeSettings as Settings, RuntimeStatus as Status, SetupPreview as Preview, TutorReportView as TutorReport, TutorSessionView as TutorSession } from "@langtut/runtime";
+import type { ActivityTurnView as ActivityTurn, ActivityView as Activity, ApiCostSummary, ExerciseAttemptResult, LearningPackageView as LearningPackage, LocalMtSettings, ModuleProgress, PackageShelf, PlacementView as Placement, RuntimeSettings as Settings, RuntimeStatus as Status, SetupPreview as Preview, TutorReportView as TutorReport, TutorSessionView as TutorSession } from "@langtut/runtime";
 import { client } from "./api.js";
 import { nativeGoogleDrive } from "./native-google-drive.js";
 import { readGoogleOAuthClientFile } from "./google-oauth.js";
@@ -24,6 +24,7 @@ export function App() {
   const [turns, setTurns] = useState<ConversationExchange[]>([]);
   const [sending, setSending] = useState(false);
   const [report, setReport] = useState<TutorReport>();
+  const [exerciseResult, setExerciseResult] = useState<ExerciseAttemptResult>();
   const [screen, setScreen] = useState<"dashboard" | "settings">("dashboard");
   const [apiKeyDialog, setApiKeyDialog] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -102,7 +103,7 @@ export function App() {
     setPlan(activePlan);
     const selectedActivityId = availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id;
     setSession(await client.startSession({ planId: activePlan.id, moduleId: activePlan.primaryModuleId ?? undefined, activityId: selectedActivityId }));
-    setTurns([]); setReport(undefined); setSending(false); setSessionInput("");
+    setTurns([]); setReport(undefined); setExerciseResult(undefined); setSending(false); setSessionInput("");
   }
   async function sendTurn() {
     const learner = sessionInput.trim();
@@ -126,6 +127,11 @@ export function App() {
     } finally {
       setSending(false);
     }
+  }
+  async function submitExercise() {
+    if (!session || !sessionInput.trim()) return;
+    const result = await client.submitExercise(session.id, sessionInput);
+    setExerciseResult(result); if (result.completed) setSession({ ...session, status: "completed" });
   }
   async function recordMilestone(moduleId: string, milestoneId: string) {
     await client.recordMilestone(moduleId, milestoneId);
@@ -280,6 +286,7 @@ export function App() {
       <div className="section-title"><span>04</span><h2>Tutor-Session</h2></div>
       {!session && <article className="wide-card"><div><small>GEFÜHRTE PRAXIS</small><h3>Aktiv anwenden, gezielt korrigieren.</h3><p>Das Lernpaket bestimmt Rollen und Ablauf; der Player führt die Methode sicher aus.</p>{availableActivities.length > 0 && <label className="activity-picker">Lernmethode<select value={availableActivities.some(({ id }) => id === activityId) ? activityId : availableActivities[0]?.id} onChange={(event) => setActivityId(event.target.value)}>{availableActivities.map((activity) => <option key={activity.id} value={activity.id}>{activity.title} · {activity.roles.length} Rollen</option>)}</select></label>}</div><button disabled={placement?.status !== "completed"} onClick={() => startTutor().catch(handleError)}>Session starten</button></article>}
       {session && <article className="tutor">
+        {session.activity?.type && session.activity.type !== "roleplay" && <div className="scenario"><small>{session.activity.type.replace(/_/g, " ")}</small><h3>{session.activity.title}</h3><p>{session.activity.exercise?.prompt}</p>{session.activity.exercise?.tokens && <p className="tags">{session.activity.exercise.tokens.map((token) => <span key={token}>{token}</span>)}</p>}{session.activity.type === "dictation_light" && <button onClick={() => window.speechSynthesis?.speak(new SpeechSynthesisUtterance(session.activity?.exercise?.hint ? "Dobrý deň" : ""))}>Vorlesen</button>}</div>}
         {session.activity?.type === "roleplay" && <div className="scenario"><small>ROLLENSPIEL</small><h3>{session.activity.title}</h3><p lang={activePackage?.targetLanguage.code}>{session.activity.scenarioTarget}</p><details><summary>Deutsche Erklärung anzeigen</summary><p lang={activePackage?.sourceLanguage.code}>{session.activity.scenarioSource}</p></details></div>}
         <div className="dialogue" aria-busy={sending}>
           {session.initialTurns?.map((response) => <PartnerMessage response={response} sessionId={session.id} targetLanguageCode={activePackage?.targetLanguage.code} sourceLanguageCode={activePackage?.sourceLanguage.code} key={response.roleId} />)}
@@ -292,10 +299,11 @@ export function App() {
         {session.status === "active" ? <>
           <div className="answer chat-input">
             <input disabled={sending} value={sessionInput} onChange={(e) => setSessionInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && sendTurn()} placeholder={sending ? "Antwort wird geschrieben …" : `Nachricht auf ${activePackage?.targetLanguage.name ?? "der Zielsprache"} …`} />
-            <button disabled={sending || !sessionInput.trim()} onClick={() => sendTurn()}>{sending ? "Sendet …" : "Senden"}</button>
+            <button disabled={sending || !sessionInput.trim()} onClick={() => session.activity?.type && session.activity.type !== "roleplay" ? submitExercise().catch(handleError) : sendTurn()}>{sending ? "Sendet …" : "Prüfen"}</button>
           </div>
           <p className="closing-hint">Verabschiede dich situationsgerecht, wenn du das Gespräch früher beenden möchtest.</p>
         </> : <div className="answer chat-input completed-input"><input disabled placeholder="Konversation abgeschlossen" /><button disabled>Senden</button></div>}
+        {exerciseResult && <div className={`report ${exerciseResult.outcome}`}><p>{exerciseResult.feedback}</p><p>Lösung: <b>{exerciseResult.expected}</b></p></div>}
         {report && <div className="report"><small>SESSIONBERICHT</small><h3>Beobachtete Lernsignale</h3><p className="goal-score">Lernzielerfüllung: <b>{report.goalCompletionPercent}%</b>{report.languageSwitches > 0 && <> · Sprachwechsel: <b>{report.languageSwitches}</b></>}</p><p>{report.observedErrors.join(" · ") || "Keine belastbaren Fehler beobachtet."}</p>{report.observedStrengths.length > 0 && <p>Stärken: {report.observedStrengths.join(" · ")}</p>}<div className="tags">{report.focusTags.map((tag) => <span key={tag}>{tag}</span>)}</div><p>Nächster Schritt: {report.nextSessionSuggestions.join(" · ")}</p></div>}
       </article>}
     </section>

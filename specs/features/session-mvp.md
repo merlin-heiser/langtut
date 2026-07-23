@@ -1,5 +1,11 @@
 # Feature: vertikale Tutor-Session
 
+## Szenario: deterministische Textübungen
+
+Textübungen verwenden ausschließlich paketierte oder vorbereitete Modulaufgaben. Ihre
+Lösungen werden server- und plattformunabhängig normalisiert und bewertet; eine nur
+ohne Diakritik abweichende Antwort ist `near_correct` und erhält keinen Volltreffer.
+
 ## Szenario: erstes Modul
 
 Gegeben ist ein leerer Lernstand und ein erreichbares, eingerichtetes Anki. Wenn der

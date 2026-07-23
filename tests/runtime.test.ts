@@ -72,7 +72,7 @@ describe("shared local runtime", () => {
         metrics: async () => ({ reachable: true, dueReviews: 0, newCards: 0, leeches: 0, lapses7d: 0 }),
         setupPreview: async () => ({ deck: { name: "test", action: "none" }, models: [] }),
         applySetup: async () => ({ deck: { name: "test", action: "none" }, models: [] }),
-        addItems: async (items: CandidateItem[]) => items.map((_item, index) => index + 1), removeNotes: async () => undefined,
+        addItems: async (items: CandidateItem[]) => items.map((_item, index) => index + 1), removeNotes: async () => undefined, syncModuleAvailability: async () => undefined,
       },
       models: { status: () => ({ fake: { configured: true } }), structured: async () => { throw new Error("not used by entry-flow contract"); } },
       localMt: { translate: async () => undefined, settings: () => ({ enabled: false, cloudFallback: true }), configure: () => undefined, status: async () => ({ runtime: { available: false }, models: [] }), install: async () => undefined },

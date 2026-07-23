@@ -7,7 +7,7 @@ import multipart from "@fastify/multipart";
 import type { LearnerProfile, LexiconLookupRequest, LexiconStagingRequest, PlacementEvaluation, SessionAnalysis, TutorReport, TutorTurn } from "@langtut/contracts";
 import {
   DEFAULT_PACKAGE_ID, LearningPackageRepository, applyProgress, createSessionPlan, deriveModuleStatus,
-  nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, type LearningActivity, type LoadedLearningPackage,
+  nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, evaluateExercise, type LearningActivity, type LoadedLearningPackage,
   type PlacementItemDefinition,
 } from "@langtut/domain";
 import { AnkiClient, type AnkiGateway } from "./anki.js";
@@ -91,7 +91,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const base = applyProgress(pkg.curriculum, store.getProgress(pkg.manifest.id));
     const progress = recomputeLocks(base, store.getProgress(pkg.manifest.id));
     for (const module of base.modules) store.setStatus(pkg.manifest.id, module.id, progress[module.id]);
-    await anki.syncModuleAvailability(pkg.manifest.id, Object.entries(progress).filter(([, status]) => status === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
+    await anki.syncModuleAvailability?.(pkg.manifest.id, Object.entries(progress).filter(([, status]) => status === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
     return applyProgress(pkg.curriculum, progress);
   }
   function pipeline() { return new ContentPipeline(store, anki, models, active(), path.join(path.dirname(config.dbPath), "diagnostics", `${activePackageId}.jsonl`), localMt); }
@@ -236,7 +236,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     };
   });
   app.get("/api/v1/curriculum/next", async () => nextAvailableModule(await refreshCurriculum()));
-  app.get("/api/v1/activities", async () => ({ packageId: activePackageId, activities: active().activities }));
+  app.get("/api/v1/activities", async () => ({ packageId: activePackageId, activities: active().activities.map(publicActivity) }));
   app.post("/api/v1/session-plans", async (_request, reply) => {
     const curriculum = await refreshCurriculum();
     const plan = createSessionPlan(await anki.metrics(), nextAvailableModule(curriculum), config.planner, activePackageId);
@@ -256,7 +256,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     evidence.attemptedMilestones = [...new Set([...evidence.attemptedMilestones, request.params.milestoneId])];
     const status = deriveModuleStatus(module.status, module, evidence);
     store.saveEvidence(activePackageId, module.id, evidence, status);
-    await anki.syncModuleAvailability(activePackageId, Object.entries(store.getProgress(activePackageId)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
+    await anki.syncModuleAvailability?.(activePackageId, Object.entries(store.getProgress(activePackageId)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId)).catch(() => undefined);
     return { packageId: activePackageId, moduleId: module.id, status, evidence };
   });
 
@@ -338,7 +338,17 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
       request.log.warn({ err: error }, "Roleplay opening failed");
       return reply.code(502).send({ error: "roleplay_opening_failed" });
     }
-    return reply.code(201).send({ ...store.getSession(id), activityId: activity?.id, activity, initialTurns });
+    return reply.code(201).send({ ...store.getSession(id), activityId: activity?.id, activity: activity ? publicActivity(activity) : undefined, initialTurns });
+  });
+  app.post<{ Params: { id: string }; Body: { answer?: string } }>("/api/v1/sessions/:id/exercise-attempts", async (request, reply) => {
+    const session = store.getSession(request.params.id); if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_exercise_not_found" });
+    const start = store.getSessionEvents(request.params.id).find(({ eventType }) => eventType === "session_started")?.payload as { activityId?: string } | undefined;
+    const activity = active().activities.find(({ id }) => id === start?.activityId);
+    if (!activity?.exercise || activity.type === "roleplay") return reply.code(409).send({ error: "session_is_not_an_exercise" });
+    const result = evaluateExercise(request.body?.answer ?? "", activity.exercise);
+    store.appendSessionEvent(request.params.id, "exercise_attempt", { activityId: activity.id, outcome: result.outcome });
+    if (result.outcome === "correct") store.completeSession(request.params.id, fallbackTutorReport(activity.focusTags ?? [], {}, { languageSwitches: 0, goalCompletionPercent: 100 }));
+    return { ...result, completed: result.outcome === "correct" };
   });
   app.post<{ Params: { id: string }; Body: { message: string } }>("/api/v1/sessions/:id/activity-turns", async (request, reply) => {
     const session = store.getSession(request.params.id);
@@ -456,6 +466,7 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
 }
 
 function fallbackActivity(): LearningActivity { return { id: "conversation", title: "Konversation", roles: [{ id: "learner", label: "Lernender", controller: "learner" }, { id: "tutor", label: "Tutor", controller: "llm", prompt: "tutor_conversation" }], turnOrder: ["learner", "tutor"], rounds: 8 }; }
+function publicActivity(activity: LearningActivity) { const { exercise, ...value } = activity; return exercise ? { ...value, exercise: { prompt: exercise.prompt, tokens: exercise.tokens, hint: exercise.hint } } : value; }
 function publicPlacement(placement: PlacementState) { return { id: placement.id, packageId: placement.packageId, status: placement.status, startedAt: placement.startedAt, itemsAnswered: placement.itemsAnswered, maxItems: placement.maxItems, recommendedModuleId: placement.recommendedModuleId, weakTags: placement.weakTags }; }
 function publicPlacementItem(item: PlacementItemDefinition) { return { id: item.id, level: item.level, prompt: item.prompt, kind: item.kind ?? "production", choices: item.choices }; }
 function publicPlacementWithNext(placement: PlacementState, items: PlacementItemDefinition[]) { return { ...publicPlacement(placement), ...(placement.status === "active" && items[placement.itemsAnswered] ? { nextItem: publicPlacementItem(items[placement.itemsAnswered]) } : {}) }; }

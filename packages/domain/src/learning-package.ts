@@ -23,7 +23,8 @@ export interface LearningActivity {
   id: string;
   title: string;
   description?: string;
-  type?: "roleplay";
+  type?: "roleplay" | import("./exercises.js").ExerciseType;
+  exercise?: import("./exercises.js").ExerciseDefinition;
   scenarioTarget?: string;
   scenarioSource?: string;
   roles: ActivityRole[];
@@ -217,6 +218,10 @@ function validateActivities(activities: LearningActivity[], prompts: Record<stri
     if (!activity.id || ids.has(activity.id)) throw new Error(`Duplicate or missing activity id: ${activity.id ?? "<missing>"}`);
     ids.add(activity.id);
     if (!Number.isInteger(activity.rounds) || activity.rounds < 1 || activity.rounds > 100) throw new Error(`${activity.id}: rounds must be between 1 and 100`);
+    if (activity.type && activity.type !== "roleplay") {
+      if (!activity.exercise?.prompt?.trim() || !activity.exercise.answers?.length) throw new Error(`${activity.id}: exercise needs prompt and answers`);
+      continue;
+    }
     const roles = new Set(activity.roles.map((role) => role.id));
     if (roles.size !== activity.roles.length || activity.turnOrder.some((role) => !roles.has(role)) || activity.turnOrder.length !== activity.roles.length || activity.roles.some(({ id }) => !activity.turnOrder.includes(id))) throw new Error(`${activity.id}: invalid role or turn order`);
     if (!activity.roles.some(({ controller }) => controller === "learner") || !activity.roles.some(({ controller }) => controller !== "learner")) throw new Error(`${activity.id}: needs learner and partner roles`);

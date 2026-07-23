@@ -120,7 +120,7 @@ export class ContentPipeline {
     evidence.importedMilestones = this.store.importedCoverage(this.pkg.manifest.id, module.id, "rule", "milestoneId");
     const status = deriveModuleStatus("preparing", module, evidence);
     this.store.saveEvidence(this.pkg.manifest.id, module.id, evidence, status);
-    await this.anki.syncModuleAvailability(this.pkg.manifest.id, Object.entries(this.store.getProgress(this.pkg.manifest.id)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId));
+    await this.anki.syncModuleAvailability?.(this.pkg.manifest.id, Object.entries(this.store.getProgress(this.pkg.manifest.id)).filter(([, value]) => value === "learning").map(([moduleId]) => moduleId));
     this.store.updateJob(jobId, { status: "completed", progress: 1, message: "Modulmaterial vollständig vorbereitet; Milestone-Aufgaben stehen noch aus." });
     await this.log({ event: "job_completed", jobId, moduleId: module.id, importedVocab: evidence.importedVocab, importedFunctions: evidence.importedFunctions.length, importedMilestones: evidence.importedMilestones.length });
   }

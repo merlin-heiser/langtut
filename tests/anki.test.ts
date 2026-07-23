@@ -54,4 +54,10 @@ describe("managed Anki models", () => {
     expect(anki.queries.every((query) => query.includes("tag:langtut"))).toBe(true);
     expect(anki.queries.every((query) => query.includes("tag:package::slowakisch-deutsch"))).toBe(true);
   });
+
+  it("only releases vocabulary cards for a learning module", async () => {
+    const anki = new FakeAnki();
+    await anki.syncModuleAvailability("slowakisch-deutsch", ["b1-final"]);
+    expect(anki.queries).toContain("tag:langtut tag:package::slowakisch-deutsch tag:module::b1-final tag:kind::vocab");
+  });
 });

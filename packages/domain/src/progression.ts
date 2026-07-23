@@ -7,6 +7,25 @@ export interface ModuleEvidence {
   attemptedMilestones: string[];
 }
 
+/** Stable IDs stored in the existing monotonic progress event.  Keeping these
+ * alongside legacy milestone attempts makes the change sync-compatible. */
+export function targetActivationId(kind: "vocab" | "function" | "grammar", id?: string): string {
+  return `target:${kind}:${id ?? "module"}`;
+}
+
+export function requiredTargetActivationIds(module: CurriculumModule): string[] {
+  return [
+    targetActivationId("vocab"),
+    ...module.functions.map((id) => targetActivationId("function", id)),
+    ...module.grammarMilestones.map(({ id }) => targetActivationId("grammar", id)),
+  ];
+}
+
+export function targetsActivated(module: CurriculumModule, evidence: ModuleEvidence): boolean {
+  const activated = new Set(evidence.attemptedMilestones);
+  return requiredTargetActivationIds(module).every((id) => activated.has(id));
+}
+
 /**
  * Large vocabulary targets are a coverage goal, not a reason to loop on the
  * final handful of marginal candidates. The remaining space is intentionally
@@ -18,8 +37,7 @@ export function vocabPreparationMinimum(module: CurriculumModule): number {
 
 export function exposureComplete(module: CurriculumModule, evidence: ModuleEvidence): boolean {
   if (!preparationComplete(module, evidence)) return false;
-  const attempts = new Set(evidence.attemptedMilestones);
-  return module.grammarMilestones.every(({ id }) => attempts.has(id));
+  return targetsActivated(module, evidence);
 }
 
 export function preparationComplete(module: CurriculumModule, evidence: ModuleEvidence): boolean {

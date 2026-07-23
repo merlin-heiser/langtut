@@ -1,6 +1,7 @@
 package de.langtut.app;
 
 import android.content.Context;
+import android.content.ContentValues;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import com.getcapacitor.JSArray;
@@ -90,11 +91,9 @@ public class AnkiDroidBridgePlugin extends Plugin {
       try {
         AddContentApi api = api(); String packageId = call.getString("packageId", "slowakisch-deutsch");
         JSArray learning = call.getArray("learningModuleIds", new JSArray());
-        long[] active = cardIds("tag:langtut tag:package::" + packageId + " -is:suspended");
-        if (active.length > 0) api.suspendCards(active);
+        setSuspended("tag:langtut tag:package::" + packageId + " -is:suspended", true);
         for (int index = 0; index < learning.length(); index++) {
-          long[] cards = cardIds("tag:langtut tag:package::" + packageId + " tag:module::" + learning.getString(index));
-          if (cards.length > 0) api.unsuspendCards(cards);
+          setSuspended("tag:langtut tag:package::" + packageId + " tag:module::" + learning.getString(index) + " tag:kind::vocab", false);
         }
         call.resolve();
       } catch (Exception error) { call.reject(error.getMessage(), error); }
@@ -108,7 +107,7 @@ public class AnkiDroidBridgePlugin extends Plugin {
     result.put("models", models); return result;
   }
   private int cardCount(String query) { try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, query, null, null)) { return cursor == null ? 0 : cursor.getCount(); } catch (Exception ignored) { return 0; } }
-  private long[] cardIds(String query) { try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, query, null, null)) { if (cursor == null) return new long[0]; int index = cursor.getColumnIndex("_id"); if (index < 0) index = cursor.getColumnIndex("id"); java.util.ArrayList<Long> ids = new java.util.ArrayList<>(); while (cursor.moveToNext()) ids.add(cursor.getLong(index)); long[] result = new long[ids.size()]; for (int i = 0; i < ids.size(); i++) result[i] = ids.get(i); return result; } }
+  private void setSuspended(String query, boolean suspend) { try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, query, null, null)) { if (cursor == null) return; int idIndex = cursor.getColumnIndex(FlashCardsContract.Card._ID); int typeIndex = cursor.getColumnIndex(FlashCardsContract.Card.TYPE); while (cursor.moveToNext()) { ContentValues values = new ContentValues(); values.put(FlashCardsContract.Card.RAW_QUEUE, suspend ? -1 : (cursor.getInt(typeIndex) == 0 ? 0 : 1)); getContext().getContentResolver().update(Uri.withAppendedPath(FlashCardsContract.Card.CONTENT_URI, String.valueOf(cursor.getLong(idIndex))), values, null, null); } } }
   private JSObject unreachable(String error) { JSObject result = new JSObject(); result.put("reachable", false); result.put("dueReviews", 0); result.put("newCards", 0); result.put("leeches", 0); result.put("lapses7d", 0); result.put("error", error == null ? "AnkiDroid nicht erreichbar" : error); return result; }
   private Long modelId(AddContentApi api, String name) { Map<Long, String> models = api.getModelList(); if (models == null) return null; for (Map.Entry<Long, String> entry : models.entrySet()) if (name.equals(entry.getValue())) return entry.getKey(); return null; }
   private long deckId(AddContentApi api, String name, boolean create) { Map<Long, String> decks = api.getDeckList(); if (decks != null) for (Map.Entry<Long, String> entry : decks.entrySet()) if (name.equals(entry.getValue())) return entry.getKey(); if (!create) return -1; Long id = api.addNewDeck(name); if (id == null) throw new IllegalStateException("AnkiDroid konnte das Deck nicht erstellen"); return id; }

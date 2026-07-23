@@ -12,8 +12,12 @@ export type SyncStatus = { configured: boolean; connected: boolean; pendingEvent
 export type RuntimeSettings = { anki: { configured: boolean; mode?: "anki-connect" | "ankidroid" }; models: { selection: { openai: string; gemini: string }; choices: { openai: string[]; gemini: string[] } }; localMt: LocalMtSettings; sync?: SyncStatus };
 export type LearningPackageView = { id: string; version: string; name: string; targetLanguage: { code: string; name: string }; sourceLanguage: { code: string; name: string }; active: boolean; modules: number; progress: { started: number; completed: number; total: number }; capabilities: { placement: boolean; nativeVocabulary: boolean; customPrompts: boolean; activities: boolean } };
 export type PackageShelf = { activePackageId: string; packages: LearningPackageView[] };
-export type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; attemptedMilestoneIds: string[] }> };
-export type ActivityView = { id: string; title: string; description?: string; type?: "roleplay"; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number };
+export type CardLearningStatus = "suspended" | "new" | "learning" | "fresh" | "mature";
+export type CardProgress = { total: number; statuses: Record<CardLearningStatus, number>; dueAutomatic: number; difficultVocab: number };
+export type ModuleTargetProgress = { id: string; kind: "vocab" | "function" | "grammar"; label: string; activated: boolean; cards: CardProgress };
+export type ModuleProgress = { modules: Record<string, { materialPrepared: boolean; attemptedMilestoneIds: string[]; cards: CardProgress; targets: ModuleTargetProgress[] }> };
+export type ActivityView = { id: string; title: string; description?: string; type?: "roleplay" | import("@langtut/domain").ExerciseType; scenarioTarget?: string; scenarioSource?: string; roles: Array<{ id: string; label: string; controller: string }>; rounds: number; exercise?: { prompt: string; tokens?: string[]; hint?: string } };
+export type ExerciseAttemptResult = { outcome: "correct" | "near_correct" | "incorrect"; expected: string; feedback: string; completed: boolean };
 export type ActivityTurnView = { roleId: string; roleLabel: string; turn: TutorTurnView };
 export type TutorSessionView = { id: string; status: string; moduleId?: string; activity?: ActivityView; initialTurns?: ActivityTurnView[] };
 export type ActivityTurnResult = { turns: ActivityTurnView[]; completed: boolean; report?: TutorReportView };
@@ -36,6 +40,8 @@ export interface LangtutClient {
   createSessionPlan(): Promise<SessionPlan>;
   startSession(input: { planId?: string; moduleId?: string; activityId?: string }): Promise<TutorSessionView>;
   activityTurn(id: string, message: string): Promise<ActivityTurnResult>;
+  submitExercise(id: string, answer: string): Promise<ExerciseAttemptResult>;
+  activateTarget(moduleId: string, targetId: string): Promise<unknown>;
   recordMilestone(moduleId: string, milestoneId: string): Promise<unknown>;
   saveAnkiKey(apiKey: string): Promise<unknown>;
   saveProviderKey(provider: "openai" | "gemini", apiKey: string): Promise<unknown>;
