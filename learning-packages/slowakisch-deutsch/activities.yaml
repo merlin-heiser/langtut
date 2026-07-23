@@ -4,6 +4,7 @@ activities:
     type: flashcards_translation
     moduleIds: [a0_alphabet_pronunciation]
     focusTags: [func_greet]
+    evidenceTargets: [function:func_greet]
     roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
     turnOrder: [system, learner]
     rounds: 1
@@ -13,6 +14,7 @@ activities:
     type: gap_fill
     moduleIds: [a0_alphabet_pronunciation]
     focusTags: [func_greet]
+    evidenceTargets: [function:func_greet]
     roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
     turnOrder: [system, learner]
     rounds: 1
@@ -22,6 +24,7 @@ activities:
     type: sentence_building
     moduleIds: [a0_alphabet_pronunciation]
     focusTags: [func_ask_info]
+    evidenceTargets: [function:func_ask_info]
     roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
     turnOrder: [system, learner]
     rounds: 1
@@ -31,6 +34,7 @@ activities:
     type: declension_drills
     moduleIds: [a0_alphabet_pronunciation]
     focusTags: [grammar_pronunciation]
+    evidenceTargets: [grammar:pronouns_personal_nom]
     roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
     turnOrder: [system, learner]
     rounds: 1
@@ -40,6 +44,7 @@ activities:
     type: conjugation_drills
     moduleIds: [a0_alphabet_pronunciation]
     focusTags: [func_introduce]
+    evidenceTargets: [grammar:verb_byt_present]
     roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
     turnOrder: [system, learner]
     rounds: 1
@@ -49,6 +54,7 @@ activities:
     type: dictation_light
     moduleIds: [a0_alphabet_pronunciation]
     focusTags: [func_greet]
+    evidenceTargets: [grammar:phonology_soft_hard]
     roles: [{ id: system, label: Aufgabe, controller: fixed, message: "Übung" }, { id: learner, label: Lernender, controller: learner }]
     turnOrder: [system, learner]
     rounds: 1

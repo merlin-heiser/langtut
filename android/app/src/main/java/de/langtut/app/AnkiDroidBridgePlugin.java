@@ -74,6 +74,8 @@ public class AnkiDroidBridgePlugin extends Plugin {
           JSONObject item = input.getJSONObject(index); String kind = item.getString("kind"); ModelDefinition definition = definition(kind); Long modelId = modelId(api, definition.name);
           if (modelId == null || owned().getLong(definition.name, -1) != modelId) { output.put(JSONObject.NULL); continue; }
           String[] fields = fields(item, packageId, kind); String moduleId = item.getString("moduleId"); HashSet<String> tags = new HashSet<>(Arrays.asList("langtut", "package::" + packageId, "module::" + moduleId, "kind::" + kind));
+          if (item.has("functionId")) tags.add("target::function::" + item.optString("functionId"));
+          if (item.has("milestoneId")) tags.add("target::grammar::" + item.optString("milestoneId"));
           JSONArray itemTags = item.optJSONArray("tags"); if (itemTags != null) for (int tag = 0; tag < itemTags.length(); tag++) tags.add(itemTags.getString(tag));
           Long noteId = api.addNote(modelId, deckId, fields, tags); output.put(noteId == null ? JSONObject.NULL : noteId);
         }

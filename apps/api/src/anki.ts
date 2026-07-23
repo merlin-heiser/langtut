@@ -11,7 +11,7 @@ export interface AnkiGateway {
   removeNotes(noteIds: number[]): Promise<void>;
   activateNotes?(noteIds: number[]): Promise<void>;
   cardProgress?(packageId: string, moduleId: string): Promise<{ total: number; statuses: Record<"suspended" | "new" | "learning" | "fresh" | "mature", number>; dueAutomatic: number; difficultVocab: number }>;
-  nextAutomaticCard?(packageId: string, moduleId: string): Promise<number | null>;
+  nextAutomaticCard?(packageId: string, moduleId: string, target?: string): Promise<number | null>;
   gradeAutomaticCard?(cardId: number, outcome: "good" | "again"): Promise<boolean>;
   syncModuleAvailability?(packageId: string, learningModuleIds: string[]): Promise<void>;
 }
@@ -130,7 +130,7 @@ export class AnkiClient implements AnkiGateway {
       deckName: this.deck,
       modelName: modelNameFor(item.kind),
       fields: fieldsFor(item, this.packageId),
-      tags: ["langtut", `package::${this.packageId}`, `module::${item.moduleId}`, `kind::${item.kind}`, ...item.tags],
+      tags: ["langtut", `package::${this.packageId}`, `module::${item.moduleId}`, `kind::${item.kind}`, ...(item.functionId ? [`target::function::${item.functionId}`] : []), ...(item.milestoneId ? [`target::grammar::${item.milestoneId}`] : []), ...item.tags],
       options: { allowDuplicate: false, duplicateScope: "deck" },
     }));
     const canAdd = await this.invoke<boolean[]>("canAddNotes", { notes });
@@ -160,8 +160,9 @@ export class AnkiClient implements AnkiGateway {
     return { total, statuses: { suspended, new: newly, learning, fresh, mature }, dueAutomatic, difficultVocab };
   }
 
-  async nextAutomaticCard(packageId: string, moduleId: string): Promise<number | null> {
-    const cards = await this.invoke<number[]>("findCards", { query: `tag:langtut tag:package::${packageId} tag:module::${moduleId} is:due (tag:kind::chunk OR tag:kind::rule)` });
+  async nextAutomaticCard(packageId: string, moduleId: string, target?: string): Promise<number | null> {
+    const targetTag = target ? ` tag:target::${target.replace(":", "::")}` : "";
+    const cards = await this.invoke<number[]>("findCards", { query: `tag:langtut tag:package::${packageId} tag:module::${moduleId}${targetTag} is:due (tag:kind::chunk OR tag:kind::rule)` });
     return cards[0] ?? null;
   }
 

@@ -31,6 +31,8 @@ export interface LearningActivity {
   turnOrder: string[];
   rounds: number;
   focusTags?: string[];
+  /** Target IDs, e.g. function:func_greet or grammar:verb_byt_present. */
+  evidenceTargets?: string[];
   moduleIds?: string[];
 }
 export interface PlacementItemDefinition {
@@ -220,6 +222,7 @@ function validateActivities(activities: LearningActivity[], prompts: Record<stri
     if (!Number.isInteger(activity.rounds) || activity.rounds < 1 || activity.rounds > 100) throw new Error(`${activity.id}: rounds must be between 1 and 100`);
     if (activity.type && activity.type !== "roleplay") {
       if (!activity.exercise?.prompt?.trim() || !activity.exercise.answers?.length) throw new Error(`${activity.id}: exercise needs prompt and answers`);
+      if (!activity.evidenceTargets?.length) throw new Error(`${activity.id}: exercise needs at least one evidence target`);
       continue;
     }
     const roles = new Set(activity.roles.map((role) => role.id));

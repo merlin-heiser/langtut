@@ -24,7 +24,10 @@ describe("learning packages", () => {
     expect(rolesBeforeLearner(pkg.activities[0])).toEqual([]);
     expect(pkg.prompts.tutor_conversation).toContain("assigned conversation role");
     const slovak = await loadLearningPackage(path.join(process.cwd(), "learning-packages", "slowakisch-deutsch"));
-    expect(slovak.activities.filter(({ type }) => type !== "roleplay")).toHaveLength(6);
+    const deterministicExercises = slovak.activities.filter(({ type }) => type !== "roleplay");
+    expect(deterministicExercises).toHaveLength(6);
+    expect(deterministicExercises.every((activity) => activity.evidenceTargets?.length)).toBe(true);
+    expect(deterministicExercises.flatMap((activity) => activity.evidenceTargets ?? [])).toEqual(expect.arrayContaining(["function:func_greet", "function:func_ask_info", "grammar:pronouns_personal_nom", "grammar:verb_byt_present", "grammar:phonology_soft_hard"]));
     expect(slovak.activities.find(({ id }) => id === "rp-spelling-desk")?.scenarioTarget).toBeTruthy();
     expect(slovak.curriculum.modules.find(({ id }) => id === "a1_food_restaurant")?.activityIds).toContain("rp-restaurant");
   });

@@ -5,6 +5,9 @@
 Textübungen verwenden ausschließlich paketierte oder vorbereitete Modulaufgaben. Ihre
 Lösungen werden server- und plattformunabhängig normalisiert und bewertet; eine nur
 ohne Diakritik abweichende Antwort ist `near_correct` und erhält keinen Volltreffer.
+Jede solche Lernmethode deklariert mindestens ein Funktions- oder Grammatikziel als
+Evidenzziel. Nur eine exakt korrekte Antwort darf die zugehörige fällige Karte mit
+`Good` bewerten; `near_correct` und falsche Antworten führen zu `Again`.
 
 ## Szenario: erstes Modul
 

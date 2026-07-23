@@ -60,4 +60,11 @@ describe("managed Anki models", () => {
     await anki.syncModuleAvailability("slowakisch-deutsch", ["b1-final"]);
     expect(anki.queries).toContain("tag:langtut tag:package::slowakisch-deutsch tag:module::b1-final tag:kind::vocab");
   });
+
+  it("tags function and grammar notes with their evidence targets", async () => {
+    const anki = new FakeAnki();
+    await anki.addItems([{ itemId: "function", kind: "chunk", moduleId: "m1", target: "Ahoj", source: "Hallo", exampleTarget: "", exampleSource: "", notes: "", tags: [], functionId: "func_greet" }, { itemId: "grammar", kind: "rule", moduleId: "m1", target: "Regel", source: "Regel", exampleTarget: "", exampleSource: "", notes: "", tags: [], milestoneId: "verb_byt" }]);
+    expect((anki.addedNotes[0] as { tags: string[] }).tags).toContain("target::function::func_greet");
+    expect((anki.addedNotes[1] as { tags: string[] }).tags).toContain("target::grammar::verb_byt");
+  });
 });

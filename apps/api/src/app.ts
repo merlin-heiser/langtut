@@ -354,8 +354,9 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (activity && module?.activityIds?.length && !module.activityIds.includes(activity.id)) return reply.code(400).send({ error: "activity_not_available_for_module" });
     const id = randomUUID(); store.createSession(activePackageId, id, request.body?.planId ?? null, request.body?.moduleId ?? null, activity?.id);
     if (module) {
-      const cardId = await anki.nextAutomaticCard?.(activePackageId, module.id);
-      if (cardId) store.appendSessionEvent(id, "automatic_card_scheduled", { cardId });
+      const evidenceTarget = activity?.evidenceTargets?.[0];
+      const cardId = await anki.nextAutomaticCard?.(activePackageId, module.id, evidenceTarget);
+      if (cardId) store.appendSessionEvent(id, "automatic_card_scheduled", { cardId, target: evidenceTarget });
     }
     let initialTurns: ActivityTurn[] = [];
     try { if (activity?.type === "roleplay") initialTurns = await executeOpeningTurns(id, activity, module); }
@@ -372,7 +373,8 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const activity = active().activities.find(({ id }) => id === start?.activityId);
     if (!activity?.exercise || activity.type === "roleplay") return reply.code(409).send({ error: "session_is_not_an_exercise" });
     const result = evaluateExercise(request.body?.answer ?? "", activity.exercise);
-    store.appendSessionEvent(request.params.id, "exercise_attempt", { activityId: activity.id, outcome: result.outcome });
+    store.appendSessionEvent(request.params.id, "exercise_attempt", { activityId: activity.id, outcome: result.outcome, evidenceTargets: activity.evidenceTargets ?? [] });
+    await gradeScheduledExerciseCard(request.params.id, result.outcome);
     if (result.outcome === "correct") store.completeSession(request.params.id, fallbackTutorReport(activity.focusTags ?? [], {}, { languageSwitches: 0, goalCompletionPercent: 100 }));
     return { ...result, completed: result.outcome === "correct" };
   });
@@ -441,6 +443,15 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
     const learnerTurn = outcome.turns.find(({ turn }) => turn.goalProgress)?.turn;
     if (!learnerTurn) return;
     const result = learnerTurn.goalProgress === "met" ? "good" : "again";
+    if (await anki.gradeAutomaticCard?.(scheduled.cardId, result)) store.appendSessionEvent(sessionId, "automatic_card_graded", { cardId: scheduled.cardId, result });
+  }
+
+  async function gradeScheduledExerciseCard(sessionId: string, outcome: "correct" | "near_correct" | "incorrect"): Promise<void> {
+    const events = store.getSessionEvents(sessionId);
+    if (events.some(({ eventType }) => eventType === "automatic_card_graded")) return;
+    const scheduled = events.find(({ eventType }) => eventType === "automatic_card_scheduled")?.payload as { cardId?: number } | undefined;
+    if (!scheduled?.cardId) return;
+    const result = outcome === "correct" ? "good" : "again";
     if (await anki.gradeAutomaticCard?.(scheduled.cardId, result)) store.appendSessionEvent(sessionId, "automatic_card_graded", { cardId: scheduled.cardId, result });
   }
 
