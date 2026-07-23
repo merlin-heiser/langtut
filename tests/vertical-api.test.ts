@@ -126,17 +126,17 @@ describe("vertical release path with fake integrations", () => {
     expect(models.vocabularyPrompts[0]).not.toContain(module.grammarMilestones[0].description);
     expect(models.vocabularyPrompts[0]).toContain("keine einzelnen Buchstaben oder Zeichen");
     const preparedProgress = (await app.inject({ method: "GET", url: "/api/v1/modules/progress" })).json();
-    expect(preparedProgress.modules[module.id]).toEqual({ materialPrepared: true, attemptedMilestoneIds: [] });
+    expect(preparedProgress.modules[module.id]).toMatchObject({ materialPrepared: true, attemptedMilestoneIds: [], targets: expect.any(Array), cards: expect.any(Object) });
     const diagnostics = (await readFile(path.join(temporary, "diagnostics/slowakisch-deutsch.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(diagnostics.filter(({ event }) => event === "batch_finished")).toHaveLength(Math.ceil(module.vocabTarget / 40));
     expect(diagnostics.some(({ event, importedTotal }) => event === "batch_finished" && importedTotal === module.vocabTarget)).toBe(true);
-    for (const milestone of module.grammarMilestones) {
-      const response = await app.inject({ method: "POST", url: `/api/v1/modules/${module.id}/milestones/${milestone.id}/attempt` });
+    for (const target of preparedProgress.modules[module.id].targets) {
+      const response = await app.inject({ method: "POST", url: `/api/v1/modules/${module.id}/targets/${encodeURIComponent(target.id)}/activate` });
       expect(response.statusCode).toBe(200);
     }
     const completedProgress = (await app.inject({ method: "GET", url: "/api/v1/modules/progress" })).json();
-    expect(completedProgress.modules[module.id].attemptedMilestoneIds).toEqual(module.grammarMilestones.map(({ id }) => id));
+    expect(completedProgress.modules[module.id].targets.every((target: { activated: boolean }) => target.activated)).toBe(true);
     const curriculum = (await app.inject({ method: "GET", url: "/api/v1/curriculum" })).json();
     expect(curriculum.modules[0].status).toBe("learning");
     expect(curriculum.modules[1].status).toBe("available");

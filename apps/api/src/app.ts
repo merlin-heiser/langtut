@@ -7,7 +7,7 @@ import multipart from "@fastify/multipart";
 import type { LearnerProfile, LexiconLookupRequest, LexiconStagingRequest, PlacementEvaluation, SessionAnalysis, TutorReport, TutorTurn } from "@langtut/contracts";
 import {
   DEFAULT_PACKAGE_ID, LearningPackageRepository, applyProgress, createSessionPlan, deriveModuleStatus,
-  nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, evaluateExercise, type LearningActivity, type LoadedLearningPackage,
+  nextAvailableModule, preparationComplete, recomputeLocks, renderPackagePrompt, evaluateExercise, targetActivationId, type LearningActivity, type LoadedLearningPackage,
   type PlacementItemDefinition,
 } from "@langtut/domain";
 import { AnkiClient, type AnkiGateway } from "./anki.js";
@@ -225,15 +225,37 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
   app.get("/api/v1/curriculum", async () => refreshCurriculum());
   app.get("/api/v1/modules/progress", async () => {
     const curriculum = await refreshCurriculum();
+    const modules = await Promise.all(curriculum.modules.map(async (module) => {
+      const evidence = store.getEvidence(activePackageId, module.id);
+      return [module.id, {
+        materialPrepared: preparationComplete(module, evidence),
+        attemptedMilestoneIds: evidence.attemptedMilestones,
+        cards: await anki.cardProgress?.(activePackageId, module.id) ?? emptyCardProgress(),
+        targets: moduleTargets(module, evidence.attemptedMilestones),
+      }] as const;
+    }));
     return {
-      modules: Object.fromEntries(curriculum.modules.map((module) => {
-        const evidence = store.getEvidence(activePackageId, module.id);
-        return [module.id, {
-          materialPrepared: preparationComplete(module, evidence),
-          attemptedMilestoneIds: evidence.attemptedMilestones,
-        }];
-      })),
+      modules: Object.fromEntries(modules),
     };
+  });
+  app.post<{ Params: { id: string; targetId: string } }>("/api/v1/modules/:id/targets/:targetId/activate", async (request, reply) => {
+    const module = (await refreshCurriculum()).modules.find((candidate) => candidate.id === request.params.id);
+    if (!module) return reply.code(404).send({ error: "unknown_module" });
+    const targetId = request.params.targetId;
+    const target = moduleTargets(module, []).find((value) => value.id === targetId);
+    if (!target) return reply.code(400).send({ error: "unknown_target" });
+    const imported = target.kind === "vocab"
+      ? store.importedItems<any>(activePackageId, module.id, "vocab")
+      : target.kind === "function"
+        ? store.importedItems<any>(activePackageId, module.id, "chunk").filter(({ item }) => targetId === targetActivationId("function", item.functionId))
+        : store.importedItems<any>(activePackageId, module.id, "rule").filter(({ item }) => targetId === targetActivationId("grammar", item.milestoneId));
+    if (!imported.length) return reply.code(409).send({ error: "target_material_not_prepared" });
+    await anki.activateNotes?.(imported.flatMap(({ ankiNoteId }) => ankiNoteId ? [ankiNoteId] : []));
+    const evidence = store.getEvidence(activePackageId, module.id);
+    evidence.attemptedMilestones = [...new Set([...evidence.attemptedMilestones, targetId])];
+    const status = deriveModuleStatus(module.status, module, evidence);
+    store.saveEvidence(activePackageId, module.id, evidence, status);
+    return { packageId: activePackageId, moduleId: module.id, targetId, status };
   });
   app.get("/api/v1/curriculum/next", async () => nextAvailableModule(await refreshCurriculum()));
   app.get("/api/v1/activities", async () => ({ packageId: activePackageId, activities: active().activities.map(publicActivity) }));
@@ -331,6 +353,10 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     const module = (await refreshCurriculum()).modules.find(({ id }) => id === request.body?.moduleId);
     if (activity && module?.activityIds?.length && !module.activityIds.includes(activity.id)) return reply.code(400).send({ error: "activity_not_available_for_module" });
     const id = randomUUID(); store.createSession(activePackageId, id, request.body?.planId ?? null, request.body?.moduleId ?? null, activity?.id);
+    if (module) {
+      const cardId = await anki.nextAutomaticCard?.(activePackageId, module.id);
+      if (cardId) store.appendSessionEvent(id, "automatic_card_scheduled", { cardId });
+    }
     let initialTurns: ActivityTurn[] = [];
     try { if (activity?.type === "roleplay") initialTurns = await executeOpeningTurns(id, activity, module); }
     catch (error) {
@@ -355,6 +381,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
     try {
       const outcome = await executeActivityTurn(request.params.id, request.body?.message ?? "", session.moduleId as string | undefined);
+      await gradeScheduledAutomaticCard(request.params.id, outcome);
       const report = outcome.shouldComplete ? await completeActiveSession(request.params.id, session, request.log) : undefined;
       return { turns: outcome.turns, completed: outcome.shouldComplete, report };
     }
@@ -365,6 +392,7 @@ export async function buildApp(root = process.cwd(), overrides: { models?: Model
     if (!session || session.packageId !== activePackageId || session.status !== "active") return reply.code(404).send({ error: "active_session_not_found" });
     let outcome: ActivityOutcome; try { outcome = await executeActivityTurn(request.params.id, request.body?.message ?? "", session.moduleId as string | undefined); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+    await gradeScheduledAutomaticCard(request.params.id, outcome);
     if (outcome.shouldComplete) await completeActiveSession(request.params.id, session, request.log);
     return outcome.turns[0]?.turn ?? emptyTutorTurn();
   });
@@ -403,6 +431,17 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
       logger.warn({ err: error }, "Session completed without rapport update");
       return fallback;
     }
+  }
+
+  async function gradeScheduledAutomaticCard(sessionId: string, outcome: ActivityOutcome): Promise<void> {
+    const events = store.getSessionEvents(sessionId);
+    if (events.some(({ eventType }) => eventType === "automatic_card_graded")) return;
+    const scheduled = events.find(({ eventType }) => eventType === "automatic_card_scheduled")?.payload as { cardId?: number } | undefined;
+    if (!scheduled?.cardId) return;
+    const learnerTurn = outcome.turns.find(({ turn }) => turn.goalProgress)?.turn;
+    if (!learnerTurn) return;
+    const result = learnerTurn.goalProgress === "met" ? "good" : "again";
+    if (await anki.gradeAutomaticCard?.(scheduled.cardId, result)) store.appendSessionEvent(sessionId, "automatic_card_graded", { cardId: scheduled.cardId, result });
   }
 
   app.get("/health", async () => ({ ok: true }));
@@ -466,6 +505,8 @@ Gesamtdialog:\n${transcript || "Kein gesprochener Inhalt."}`;
 }
 
 function fallbackActivity(): LearningActivity { return { id: "conversation", title: "Konversation", roles: [{ id: "learner", label: "Lernender", controller: "learner" }, { id: "tutor", label: "Tutor", controller: "llm", prompt: "tutor_conversation" }], turnOrder: ["learner", "tutor"], rounds: 8 }; }
+function emptyCardProgress() { return { total: 0, statuses: { suspended: 0, new: 0, learning: 0, fresh: 0, mature: 0 }, dueAutomatic: 0, difficultVocab: 0 }; }
+function moduleTargets(module: { functions: string[]; grammarMilestones: Array<{ id: string; description: string }> }, activated: string[]) { return [{ id: targetActivationId("vocab"), kind: "vocab" as const, label: "Wortschatz" }, ...module.functions.map((id) => ({ id: targetActivationId("function", id), kind: "function" as const, label: id })), ...module.grammarMilestones.map(({ id, description }) => ({ id: targetActivationId("grammar", id), kind: "grammar" as const, label: description }))].map((target) => ({ ...target, activated: activated.includes(target.id), cards: emptyCardProgress() })); }
 function publicActivity(activity: LearningActivity) { const { exercise, ...value } = activity; return exercise ? { ...value, exercise: { prompt: exercise.prompt, tokens: exercise.tokens, hint: exercise.hint } } : value; }
 function publicPlacement(placement: PlacementState) { return { id: placement.id, packageId: placement.packageId, status: placement.status, startedAt: placement.startedAt, itemsAnswered: placement.itemsAnswered, maxItems: placement.maxItems, recommendedModuleId: placement.recommendedModuleId, weakTags: placement.weakTags }; }
 function publicPlacementItem(item: PlacementItemDefinition) { return { id: item.id, level: item.level, prompt: item.prompt, kind: item.kind ?? "production", choices: item.choices }; }

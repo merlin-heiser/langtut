@@ -86,6 +86,16 @@ public class AnkiDroidBridgePlugin extends Plugin {
     new Thread(() -> { try { JSArray ids = call.getArray("noteIds", new JSArray()); for (int index = 0; index < ids.length(); index++) getContext().getContentResolver().delete(Uri.withAppendedPath(FlashCardsContract.Note.CONTENT_URI, String.valueOf(ids.getLong(index))), null, null); call.resolve(); } catch (Exception error) { call.reject(error.getMessage(), error); } }).start();
   }
 
+  @PluginMethod public void activateNotes(PluginCall call) {
+    new Thread(() -> {
+      try {
+        JSArray ids = call.getArray("noteIds", new JSArray());
+        for (int index = 0; index < ids.length(); index++) setSuspended("nid:" + ids.getLong(index), false);
+        call.resolve();
+      } catch (Exception error) { call.reject(error.getMessage(), error); }
+    }).start();
+  }
+
   @PluginMethod public void syncModuleAvailability(PluginCall call) {
     new Thread(() -> {
       try {

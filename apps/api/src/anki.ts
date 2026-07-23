@@ -9,6 +9,10 @@ export interface AnkiGateway {
   applySetup(): Promise<SetupPreview>;
   addItems(items: CandidateItem[]): Promise<Array<number | null>>;
   removeNotes(noteIds: number[]): Promise<void>;
+  activateNotes?(noteIds: number[]): Promise<void>;
+  cardProgress?(packageId: string, moduleId: string): Promise<{ total: number; statuses: Record<"suspended" | "new" | "learning" | "fresh" | "mature", number>; dueAutomatic: number; difficultVocab: number }>;
+  nextAutomaticCard?(packageId: string, moduleId: string): Promise<number | null>;
+  gradeAutomaticCard?(cardId: number, outcome: "good" | "again"): Promise<boolean>;
   syncModuleAvailability?(packageId: string, learningModuleIds: string[]): Promise<void>;
 }
 
@@ -138,6 +142,32 @@ export class AnkiClient implements AnkiGateway {
 
   async removeNotes(noteIds: number[]): Promise<void> {
     if (noteIds.length) await this.invoke("deleteNotes", { notes: noteIds });
+  }
+
+  async activateNotes(noteIds: number[]): Promise<void> {
+    if (!noteIds.length) return;
+    const cards = await this.invoke<number[]>("findCards", { query: `nid:${noteIds.join(",")}` });
+    if (cards.length) await this.invoke("unsuspend", { cards });
+  }
+
+  async cardProgress(packageId: string, moduleId: string) {
+    const base = `tag:langtut tag:package::${packageId} tag:module::${moduleId}`;
+    const count = async (query: string) => (await this.invoke<number[]>("findCards", { query })).length;
+    const [total, suspended, fresh, mature, newly, learning, dueAutomatic, difficultVocab] = await Promise.all([
+      count(base), count(`${base} is:suspended`), count(`${base} is:review -prop:ivl>=21`), count(`${base} is:review prop:ivl>=21`), count(`${base} is:new`), count(`${base} is:learn`),
+      count(`${base} is:due (tag:kind::chunk OR tag:kind::rule)`), count(`${base} tag:kind::vocab (tag:leech OR prop:lapses>0)`),
+    ]);
+    return { total, statuses: { suspended, new: newly, learning, fresh, mature }, dueAutomatic, difficultVocab };
+  }
+
+  async nextAutomaticCard(packageId: string, moduleId: string): Promise<number | null> {
+    const cards = await this.invoke<number[]>("findCards", { query: `tag:langtut tag:package::${packageId} tag:module::${moduleId} is:due (tag:kind::chunk OR tag:kind::rule)` });
+    return cards[0] ?? null;
+  }
+
+  async gradeAutomaticCard(cardId: number, outcome: "good" | "again"): Promise<boolean> {
+    const result = await this.invoke<boolean[]>("answerCards", { answers: [{ cardId, ease: outcome === "good" ? 3 : 1 }] });
+    return result[0] === true;
   }
 
   async syncModuleAvailability(packageId: string, learningModuleIds: string[]): Promise<void> {

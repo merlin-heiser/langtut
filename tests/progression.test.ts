@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CurriculumModule } from "@langtut/contracts";
-import { deriveModuleStatus, exposureComplete, preparationComplete, vocabPreparationMinimum } from "../packages/domain/src/index.js";
+import { deriveModuleStatus, exposureComplete, preparationComplete, targetActivationId, vocabPreparationMinimum } from "../packages/domain/src/index.js";
 
 const module: CurriculumModule = {
   id: "m1", cefr: "A1", displayLevel: "A1", title: "Test", vocabTarget: 40,
@@ -19,7 +19,7 @@ describe("progression is exposure, not mastery", () => {
     const evidence = { importedVocab: 40, importedFunctions: ["greet"], importedMilestones: ["case_nom"], attemptedMilestones: [] };
     expect(preparationComplete(module, evidence)).toBe(true);
     expect(exposureComplete(module, evidence)).toBe(false);
-    evidence.attemptedMilestones.push("case_nom");
+    evidence.attemptedMilestones.push(targetActivationId("vocab"), targetActivationId("function", "greet"), targetActivationId("grammar", "case_nom"));
     expect(exposureComplete(module, evidence)).toBe(true);
     expect(deriveModuleStatus("preparing", module, evidence)).toBe("learning");
   });

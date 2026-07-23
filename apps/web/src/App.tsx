@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Curriculum, CurriculumModule, Job, LexiconLookupResult, LexiconSenseCandidate, SessionPlan } from "@langtut/contracts";
-import type { ActivityTurnView as ActivityTurn, ActivityView as Activity, ApiCostSummary, ExerciseAttemptResult, LearningPackageView as LearningPackage, LocalMtSettings, ModuleProgress, PackageShelf, PlacementView as Placement, RuntimeSettings as Settings, RuntimeStatus as Status, SetupPreview as Preview, TutorReportView as TutorReport, TutorSessionView as TutorSession } from "@langtut/runtime";
+import type { ActivityTurnView as ActivityTurn, ActivityView as Activity, ApiCostSummary, CardProgress, ExerciseAttemptResult, LearningPackageView as LearningPackage, LocalMtSettings, ModuleProgress, PackageShelf, PlacementView as Placement, RuntimeSettings as Settings, RuntimeStatus as Status, SetupPreview as Preview, TutorReportView as TutorReport, TutorSessionView as TutorSession } from "@langtut/runtime";
 import { client } from "./api.js";
 import { nativeGoogleDrive } from "./native-google-drive.js";
 import { readGoogleOAuthClientFile } from "./google-oauth.js";
@@ -138,6 +138,11 @@ export function App() {
     setNotice(`Aktiver Versuch für ${milestoneId} protokolliert.`);
     await reload();
   }
+  async function activateTarget(moduleId: string, targetId: string) {
+    await client.activateTarget(moduleId, targetId);
+    setNotice("Lernlektion abgeschlossen – die zugehörigen Karten sind jetzt in Anki eingesetzt.");
+    await reload();
+  }
 
   async function saveApiKey() {
     if (!apiKey.trim()) return;
@@ -272,10 +277,8 @@ export function App() {
       <div className="roadmap">{curriculum?.modules.map((module, index) => {
         const progress = moduleProgress[module.id];
         const milestoneWorkReady = module.status === "preparing" && progress?.materialPrepared;
-        const attempted = new Set(progress?.attemptedMilestoneIds ?? []);
-        const pendingMilestones = module.grammarMilestones.filter(({ id }) => !attempted.has(id));
         return <article className={`module ${module.status}`} key={module.id}>
-          <div className="module-index">{String(index + 1).padStart(2, "0")}</div><div><small>{module.displayLevel} · {module.status}</small><h3>{module.title}</h3><p>Ziel: {module.vocabTarget} Vokabeln · {module.grammarMilestones.length} Grammatikziele</p><div className="tags">{module.focusTags.map((tag) => <span key={tag}>{tag.replace(/^(topic_|func_|grammar_|case_|verb_|syntax_)/, "")}</span>)}</div>{milestoneWorkReady && <details className="milestones" open><summary>Milestone-Aufgaben · {pendingMilestones.length} offen</summary>{pendingMilestones.map((milestone) => <button key={milestone.id} onClick={() => recordMilestone(module.id, milestone.id).catch(handleError)}>{milestone.description} · Versuch protokollieren</button>)}</details>}</div>
+          <div className="module-index">{String(index + 1).padStart(2, "0")}</div><div><small>{module.displayLevel} · {module.status}</small><h3>{module.title}</h3><p>Ziel: {module.vocabTarget} Vokabeln · {module.grammarMilestones.length} Grammatikziele</p><ProgressBar progress={progress?.cards} /><div className="tags">{module.focusTags.map((tag) => <span key={tag}>{tag.replace(/^(topic_|func_|grammar_|case_|verb_|syntax_)/, "")}</span>)}</div>{milestoneWorkReady && <details className="milestones" open><summary>Lernziele</summary>{progress?.targets.map((target) => <div className="target" key={target.id}><span>{target.label}</span><ProgressBar progress={target.cards} />{target.activated ? <small>eingesetzt</small> : <button onClick={() => activateTarget(module.id, target.id).catch(handleError)}>Lernlektion abschließen</button>}</div>)}</details>}</div>
           {(module.status === "available" || (module.status === "preparing" && !progress?.materialPrepared)) && <button className="prepare" disabled={placement?.status !== "completed" || (job?.moduleId === module.id && ["queued", "running"].includes(job.status))} onClick={() => prepare(module)}>{module.status === "preparing" ? "Vorbereitung fortsetzen" : "Vorbereiten"}</button>}
         </article>;
       })}</div>
@@ -396,4 +399,10 @@ function formatUsd(value?: number) {
 
 function formatBytes(value: number) {
   return `${(value / 1_000_000_000).toLocaleString("de-DE", { maximumFractionDigits: 2 })} GB`;
+}
+
+function ProgressBar({ progress }: { progress?: CardProgress }) {
+  if (!progress?.total) return <small className="progress-empty">Noch keine Karten eingesetzt</small>;
+  const learned = progress.statuses.learning + progress.statuses.fresh + progress.statuses.mature;
+  return <div className="progress-bar" aria-label={`${learned} von ${progress.total} Karten lernend oder wiederholt`}><i style={{ width: `${learned / progress.total * 100}%` }} /></div>;
 }

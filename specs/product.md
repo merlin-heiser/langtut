@@ -20,8 +20,14 @@
 ## Progression
 
 Module durchlaufen `locked`, `available`, `preparing`, `learning` oder `credited`.
-`learning` bedeutet vollständige Erstexposition, nicht Beherrschung. Spätere Schwächen
+`learning` bedeutet vollständige Erstaktivierung aller vorbereiteten Vokabel-, Funktions-
+und Grammatikziele, nicht Beherrschung. Eine Karte wird erst durch ihre zielbezogene
+Lernlektion von ausgesetzt auf neu gesetzt. Spätere Schwächen
 führen zu Recovery, niemals zu einer Rückstufung.
+
+Langtut darf Funktions- und Grammatik-Karten nur nach zielgebundener Übungsevidenz
+automatisch mit Good oder Again bewerten. Vokabelkarten dürfen nach ihrer Lektion
+eingesetzt, aber ausschließlich durch eine Nutzerhandlung in Anki bewertet werden.
 
 ## Plattform
 
