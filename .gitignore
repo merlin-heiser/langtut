@@ -17,3 +17,6 @@ android/keystore.properties
 android/local.properties
 android/*.jks
 android/*.keystore
+
+# Large local translation model weights are runtime assets, not source files.
+data/local-mt/*/pytorch_model.bin
