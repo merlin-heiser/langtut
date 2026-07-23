@@ -22,3 +22,8 @@ Clients append immutable `SyncEventV1` events locally, upload closed segments to
 ## Platform symmetry
 
 Every observable learning operation must pass the same runtime conformance suite through both the Fastify HTTP client and the Android in-process client. Android artifacts must not contain or require a Langtut backend URL. Optional capabilities such as local machine translation are reported explicitly and must not block the core learning flow.
+
+In particular, the runtime schedules due Langtut chunk/rule cards, records an
+automatic `Good` or `Again` only from evaluated session evidence, and projects that
+evidence into target activation. Platform Anki bridges provide card discovery,
+automatic grading and progress counts; they do not decide learning policy.

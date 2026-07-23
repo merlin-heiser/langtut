@@ -22,20 +22,25 @@ class ProviderMock implements RuntimeProviderBridge {
   }
 }
 class AnkiMock implements RuntimeAnkiBridge {
+  scheduled: Array<{ packageId: string; moduleId: string; target?: string }> = [];
+  grades: Array<{ cardId: number; outcome: "good" | "again" }> = [];
   async metrics(): Promise<AnkiMetrics> { return { reachable: true, version: 2, dueReviews: 0, newCards: 0, leeches: 0, lapses7d: 0 }; }
   async setupPreview(_packageId: string, deck: string) { return { deck: { name: deck, action: "none" as const }, models: [] }; }
   async applySetup(packageId: string, deck: string) { return this.setupPreview(packageId, deck); }
   async addItems(_packageId: string, _deck: string, items: CandidateItem[]) { return items.map((_item, index) => index + 1); }
   async removeNotes() {}
+  async syncModuleAvailability() {}
+  async nextAutomaticCard(packageId: string, moduleId: string, target?: string) { this.scheduled.push({ packageId, moduleId, target }); return 42; }
+  async gradeAutomaticCard(cardId: number, outcome: "good" | "again") { this.grades.push({ cardId, outcome }); return true; }
 }
 
-async function fixture(persistence = new MemoryPersistence(), providers = new ProviderMock()) {
+async function fixture(persistence = new MemoryPersistence(), providers = new ProviderMock(), anki = new AnkiMock()) {
   const root = process.cwd(); const read = (file: string) => readFile(path.join(root, file), "utf8");
   const [packageYaml, curriculumYaml, promptsYaml, activitiesYaml, placementYaml, modelTasksYaml, modelPricingYaml, contractsRaw] = await Promise.all([
     read("learning-packages/slowakisch-deutsch/package.yaml"), read("learning-packages/slowakisch-deutsch/curriculum.yaml"), read("learning-packages/slowakisch-deutsch/prompts.yaml"), read("learning-packages/slowakisch-deutsch/activities.yaml"), read("learning-packages/slowakisch-deutsch/placement.yaml"), read("config/model_tasks.yaml"), read("config/model_pricing.yaml"), read("specs/schemas/contracts.schema.json"),
   ]);
-  const client = await createLocalLangtutClient({ builtInPackage: { package: packageYaml, curriculum: curriculumYaml, prompts: promptsYaml, activities: activitiesYaml, placement: placementYaml }, modelTasksYaml, modelPricingYaml, contractsSchema: JSON.parse(contractsRaw), persistence, providers, anki: new AnkiMock() });
-  return { client, persistence, providers };
+  const client = await createLocalLangtutClient({ builtInPackage: { package: packageYaml, curriculum: curriculumYaml, prompts: promptsYaml, activities: activitiesYaml, placement: placementYaml }, modelTasksYaml, modelPricingYaml, contractsSchema: JSON.parse(contractsRaw), persistence, providers, anki });
+  return { client, persistence, providers, anki };
 }
 
 describe("shared local runtime", () => {
@@ -60,6 +65,14 @@ describe("shared local runtime", () => {
     const result = await client.activityTurn(session.id, "Dobrý deň");
     expect(result.turns[0].turn.message).toBe("Dobrý deň!");
     expect((await client.costs()).totalInputTokens).toBeGreaterThan(0);
+  });
+
+  it("schedules a due automatic card and grades it solely from exercise evidence", async () => {
+    const { client, anki } = await fixture();
+    const session = await client.startSession({ moduleId: "a0_alphabet_pronunciation", activityId: "ex-flashcard-greeting" });
+    expect(anki.scheduled).toEqual([{ packageId: "slowakisch-deutsch", moduleId: "a0_alphabet_pronunciation", target: "function:func_greet" }]);
+    await client.submitExercise(session.id, "Dobrý deň");
+    expect(anki.grades).toEqual([{ cardId: 42, outcome: "good" }]);
   });
 
   it("keeps the direct and HTTP bindings conformant for the learning entry flow", async () => {

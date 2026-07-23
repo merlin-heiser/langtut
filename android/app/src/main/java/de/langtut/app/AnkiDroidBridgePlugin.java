@@ -112,6 +112,42 @@ public class AnkiDroidBridgePlugin extends Plugin {
     }).start();
   }
 
+  /** Read-only review selection and progress counts; policy stays in the TypeScript runtime. */
+  @PluginMethod public void cardProgress(PluginCall call) {
+    new Thread(() -> {
+      try {
+        String packageId = call.getString("packageId", "slowakisch-deutsch"), moduleId = call.getString("moduleId", "");
+        String base = "tag:langtut tag:package::" + packageId + " tag:module::" + moduleId;
+        JSObject statuses = new JSObject(); statuses.put("suspended", cardCount(base + " is:suspended")); statuses.put("new", cardCount(base + " is:new")); statuses.put("learning", cardCount(base + " is:learn")); statuses.put("fresh", cardCount(base + " is:review -prop:ivl>=21")); statuses.put("mature", cardCount(base + " is:review prop:ivl>=21"));
+        JSObject result = new JSObject(); result.put("total", cardCount(base)); result.put("statuses", statuses); result.put("dueAutomatic", cardCount(base + " is:due (tag:kind::chunk OR tag:kind::rule)")); result.put("difficultVocab", cardCount(base + " tag:kind::vocab (tag:leech OR prop:lapses>0)")); call.resolve(result);
+      } catch (Exception error) { call.reject(error.getMessage(), error); }
+    }).start();
+  }
+
+  @PluginMethod public void nextAutomaticCard(PluginCall call) {
+    new Thread(() -> {
+      try {
+        String packageId = call.getString("packageId", "slowakisch-deutsch"), moduleId = call.getString("moduleId", ""), target = call.getString("target", "");
+        String targetTag = target.isEmpty() ? "" : " tag:target::" + target.replace(":", "::");
+        JSObject result = new JSObject(); result.put("cardId", firstCardId("tag:langtut tag:package::" + packageId + " tag:module::" + moduleId + targetTag + " is:due (tag:kind::chunk OR tag:kind::rule)")); call.resolve(result);
+      } catch (Exception error) { call.reject(error.getMessage(), error); }
+    }).start();
+  }
+
+  /** Uses AnkiDroid's public ReviewInfo provider so Anki remains the SRS authority. */
+  @PluginMethod public void gradeAutomaticCard(PluginCall call) {
+    new Thread(() -> {
+      try {
+        long cardId = call.getLong("cardId"); String outcome = call.getString("outcome", "again");
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, "cid:" + cardId, null, null)) {
+          if (cursor == null || !cursor.moveToFirst()) { JSObject result = new JSObject(); result.put("graded", false); call.resolve(result); return; }
+          ContentValues values = new ContentValues(); values.put(FlashCardsContract.ReviewInfo.NOTE_ID, cursor.getLong(cursor.getColumnIndexOrThrow(FlashCardsContract.Card.NOTE_ID))); values.put(FlashCardsContract.ReviewInfo.CARD_ORD, cursor.getInt(cursor.getColumnIndexOrThrow(FlashCardsContract.Card.CARD_ORD))); values.put(FlashCardsContract.ReviewInfo.EASE, "good".equals(outcome) ? 3 : 1); values.put(FlashCardsContract.ReviewInfo.TIME_TAKEN, 0);
+          JSObject result = new JSObject(); result.put("graded", getContext().getContentResolver().update(FlashCardsContract.ReviewInfo.CONTENT_URI, values, null, null) > 0); call.resolve(result);
+        }
+      } catch (Exception error) { call.reject(error.getMessage(), error); }
+    }).start();
+  }
+
   private JSObject preview(String deck) throws Exception {
     AddContentApi api = api(); if (api.getApiHostSpecVersion() < 0) throw new IllegalStateException("AnkiDroid ist nicht installiert.");
     JSObject result = new JSObject(); JSObject deckResult = new JSObject(); deckResult.put("name", deck); deckResult.put("action", deckId(api, deck, false) < 0 ? "create" : "none"); result.put("deck", deckResult); JSArray models = new JSArray();
@@ -119,6 +155,7 @@ public class AnkiDroidBridgePlugin extends Plugin {
     result.put("models", models); return result;
   }
   private int cardCount(String query) { try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, query, null, null)) { return cursor == null ? 0 : cursor.getCount(); } catch (Exception ignored) { return 0; } }
+  private Long firstCardId(String query) { try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, query, null, null)) { if (cursor == null || !cursor.moveToFirst()) return null; return cursor.getLong(cursor.getColumnIndexOrThrow(FlashCardsContract.Card._ID)); } }
   private void setSuspended(String query, boolean suspend) { try (android.database.Cursor cursor = getContext().getContentResolver().query(FlashCardsContract.Card.CONTENT_URI, null, query, null, null)) { if (cursor == null) return; int idIndex = cursor.getColumnIndex(FlashCardsContract.Card._ID); int typeIndex = cursor.getColumnIndex(FlashCardsContract.Card.TYPE); while (cursor.moveToNext()) { ContentValues values = new ContentValues(); values.put(FlashCardsContract.Card.RAW_QUEUE, suspend ? -1 : (cursor.getInt(typeIndex) == 0 ? 0 : 1)); getContext().getContentResolver().update(Uri.withAppendedPath(FlashCardsContract.Card.CONTENT_URI, String.valueOf(cursor.getLong(idIndex))), values, null, null); } } }
   private JSObject unreachable(String error) { JSObject result = new JSObject(); result.put("reachable", false); result.put("dueReviews", 0); result.put("newCards", 0); result.put("leeches", 0); result.put("lapses7d", 0); result.put("error", error == null ? "AnkiDroid nicht erreichbar" : error); return result; }
   private Long modelId(AddContentApi api, String name) { Map<Long, String> models = api.getModelList(); if (models == null) return null; for (Map.Entry<Long, String> entry : models.entrySet()) if (name.equals(entry.getValue())) return entry.getKey(); return null; }

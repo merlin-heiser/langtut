@@ -10,7 +10,7 @@ import placementYaml from "../../../learning-packages/slowakisch-deutsch/placeme
 
 type NativePlugins = {
   ProviderBridge?: { status(): Promise<{ openai: boolean; gemini: boolean }>; setKey(options: { provider: "openai" | "gemini"; key: string }): Promise<void>; request(options: { provider: "openai" | "gemini"; url: string; body: string }): Promise<{ status: number; body: string }> };
-  AnkiDroidBridge?: { metrics(options: { packageId: string }): Promise<any>; setupPreview(options: { packageId: string; deck: string }): Promise<any>; applySetup(options: { packageId: string; deck: string }): Promise<any>; addItems(options: { packageId: string; deck: string; items: unknown[] }): Promise<{ noteIds: Array<number | null> }>; syncModuleAvailability(options: { packageId: string; learningModuleIds: string[] }): Promise<void>; removeNotes(options: { noteIds: number[] }): Promise<void>; activateNotes(options: { noteIds: number[] }): Promise<void> };
+  AnkiDroidBridge?: { metrics(options: { packageId: string }): Promise<any>; setupPreview(options: { packageId: string; deck: string }): Promise<any>; applySetup(options: { packageId: string; deck: string }): Promise<any>; addItems(options: { packageId: string; deck: string; items: unknown[] }): Promise<{ noteIds: Array<number | null> }>; syncModuleAvailability(options: { packageId: string; learningModuleIds: string[] }): Promise<void>; removeNotes(options: { noteIds: number[] }): Promise<void>; activateNotes(options: { noteIds: number[] }): Promise<void>; cardProgress(options: { packageId: string; moduleId: string }): Promise<any>; nextAutomaticCard(options: { packageId: string; moduleId: string; target?: string }): Promise<{ cardId: number | null }>; gradeAutomaticCard(options: { cardId: number; outcome: "good" | "again" }): Promise<{ graded: boolean }> };
 };
 type CapacitorWindow = Window & { Capacitor?: { Plugins?: NativePlugins } };
 
@@ -34,6 +34,9 @@ const anki: RuntimeAnkiBridge = {
   addItems: async (packageId, deck, items) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); return (await bridge.addItems({ packageId, deck, items })).noteIds; },
   removeNotes: async (noteIds) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); await bridge.removeNotes({ noteIds }); },
   activateNotes: async (noteIds) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); await bridge.activateNotes({ noteIds }); },
+  cardProgress: async (packageId, moduleId) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); return bridge.cardProgress({ packageId, moduleId }); },
+  nextAutomaticCard: async (packageId, moduleId, target) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); return (await bridge.nextAutomaticCard({ packageId, moduleId, target })).cardId; },
+  gradeAutomaticCard: async (cardId, outcome) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); return (await bridge.gradeAutomaticCard({ cardId, outcome })).graded; },
   syncModuleAvailability: async (packageId, learningModuleIds) => { const bridge = plugins().AnkiDroidBridge; if (!bridge) throw new Error("AnkiDroid-Bridge fehlt"); await bridge.syncModuleAvailability({ packageId, learningModuleIds }); },
 };
 

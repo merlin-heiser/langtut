@@ -24,6 +24,14 @@ zielgebundene Übungen für die fälligen Funktions- und Grammatik-Karten. Nur d
 ausgewertete Übungsantworten dürfen Good oder Again an Anki senden. Schwierige
 Vokabeln dürfen unterstützend geübt, aber nicht automatisch bewertet werden.
 
+Eine bestandene deterministische Übung liefert zugleich die Evidenz für jedes von
+`evidenceTargets` deklarierte Funktions- oder Grammatikziel. Erst dann aktiviert der
+Player die zugehörige Note und aktualisiert die Modulprogression. Die Oberfläche darf
+keine allgemeine Aktion anbieten, die ein Ziel ohne eine solche Session-Evidenz
+aktiviert. Die Auswahl der fälligen Karte, die Bewertung und die Evidenzprojektion
+liegen im gemeinsamen Runtime; Windows- und Android-Anki-Bridges implementieren nur
+die dafür benötigten Anki-Operationen.
+
 ## Szenario: Freischaltung ohne Mastery
 
 Wenn alle Notes importiert und jedes Vokabel-, Funktions- und Grammatikziel durch
