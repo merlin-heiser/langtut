@@ -3,8 +3,25 @@ import type { LangtutClient } from "@langtut/runtime";
 const API_BASE = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, "") || "/api/v1";
 
 export function createHttpLangtutClient(base = API_BASE, fetcher: typeof fetch = fetch): LangtutClient {
+const retryableMethods = new Set(["GET", "HEAD", "OPTIONS"]);
+const retryableStatuses = new Set([502, 503, 504]);
+
+async function fetchWithTransientRetry(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const canRetry = retryableMethods.has(method);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await fetcher(input, init);
+      if (!canRetry || !retryableStatuses.has(response.status) || attempt >= 2) return response;
+    } catch (error) {
+      if (!canRetry || attempt >= 2) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetcher(`${base}${path}`, { ...init, headers: { ...(!(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...init?.headers } });
+  const response = await fetchWithTransientRetry(`${base}${path}`, { ...init, headers: { ...(!(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...init?.headers } });
   const raw = await response.text(); let body: Record<string, unknown> | undefined;
   if (raw.trim()) { try { body = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error(`Ungültige Serverantwort (${response.status})`); } }
   if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${response.status}`);
