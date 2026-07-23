@@ -151,13 +151,17 @@ export class AnkiClient implements AnkiGateway {
   }
 
   async cardProgress(packageId: string, moduleId: string) {
-    const base = `tag:langtut tag:package::${packageId} tag:module::${moduleId}`;
-    const count = async (query: string) => (await this.invoke<number[]>("findCards", { query })).length;
-    const [total, suspended, fresh, mature, newly, learning, dueAutomatic, difficultVocab] = await Promise.all([
-      count(base), count(`${base} is:suspended`), count(`${base} is:review -prop:ivl>=21`), count(`${base} is:review prop:ivl>=21`), count(`${base} is:new`), count(`${base} is:learn`),
-      count(`${base} is:due (tag:kind::chunk OR tag:kind::rule)`), count(`${base} tag:kind::vocab (tag:leech OR prop:lapses>0)`),
-    ]);
-    return { total, statuses: { suspended, new: newly, learning, fresh, mature }, dueAutomatic, difficultVocab };
+    try {
+      const base = `tag:langtut tag:package::${packageId} tag:module::${moduleId}`;
+      const count = async (query: string) => (await this.invoke<number[]>("findCards", { query })).length;
+      const [total, suspended, fresh, mature, newly, learning, dueAutomatic, difficultVocab] = await Promise.all([
+        count(base), count(`${base} is:suspended`), count(`${base} is:review -prop:ivl>=21`), count(`${base} is:review prop:ivl>=21`), count(`${base} is:new`), count(`${base} is:learn`),
+        count(`${base} is:due (tag:kind::chunk OR tag:kind::rule)`), count(`${base} tag:kind::vocab (tag:leech OR prop:lapses>0)`),
+      ]);
+      return { total, statuses: { suspended, new: newly, learning, fresh, mature }, dueAutomatic, difficultVocab };
+    } catch {
+      return { total: 0, statuses: { suspended: 0, new: 0, learning: 0, fresh: 0, mature: 0 }, dueAutomatic: 0, difficultVocab: 0 };
+    }
   }
 
   async nextAutomaticCard(packageId: string, moduleId: string, target?: string): Promise<number | null> {

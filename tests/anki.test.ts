@@ -67,4 +67,10 @@ describe("managed Anki models", () => {
     expect((anki.addedNotes[0] as { tags: string[] }).tags).toContain("target::function::func_greet");
     expect((anki.addedNotes[1] as { tags: string[] }).tags).toContain("target::grammar::verb_byt");
   });
+
+  it("returns empty progress when AnkiConnect is unavailable", async () => {
+    class UnavailableAnki extends AnkiClient { override async invoke<T>(): Promise<T> { throw new Error("connection refused"); } }
+    const progress = await new UnavailableAnki("fake://anki", "Slovak Tutor").cardProgress("slowakisch-deutsch", "m1");
+    expect(progress).toMatchObject({ total: 0, dueAutomatic: 0, difficultVocab: 0, statuses: { suspended: 0, new: 0, learning: 0, fresh: 0, mature: 0 } });
+  });
 });
